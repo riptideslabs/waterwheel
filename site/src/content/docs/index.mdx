@@ -1,0 +1,140 @@
+---
+title: Workload identity for Kubernetes
+description: Waterwheel exchanges a pod's Kubernetes service account token for short-lived API tokens, so pods call Anthropic, OpenAI and other APIs without holding a key.
+template: splash
+editUrl: false
+hero:
+  title: Waterwheel
+  tagline: Workload identity for Kubernetes. Your pods call AI and cloud APIs with short-lived tokens, and never hold a key.
+  actions:
+    - text: How it works
+      link: "#how-it-works"
+      icon: down-arrow
+    - text: Read the design
+      link: https://github.com/riptideslabs/waterwheel/blob/main/docs/design.md
+      icon: external
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/riptideslabs/waterwheel
+      icon: github
+      variant: minimal
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import Architecture from '../../components/Architecture.astro';
+import Features from '../../components/Features.astro';
+import Feature from '../../components/Feature.astro';
+
+## Why
+
+An API key in a pod can be taken by anyone who gets into the pod. It sits in an environment variable or a Secret, where every process, every `kubectl exec` and every leaked backup can read it.
+
+Anthropic, OpenAI and the cloud providers now offer workload identity federation instead. The workload proves who it is with a signed token and gets a short-lived one back. Every pod already has such a token: Kubernetes signs one for its service account. Waterwheel uses it for every pod, without changing the app.
+
+## How it works
+
+The example is `support-bot`, a Python service in the `support` namespace that answers customer tickets with Claude through Anthropic's Python SDK.
+
+<Architecture>
+  Waterwheel's components have teal outlines. The app never sees a key or a token: the service account tokens are mounted only into the sidecar, and the Anthropic token only exists in its memory.
+</Architecture>
+
+<Steps>
+
+1. The kubelet writes the pod's service account tokens, signed by the API server, into a volume only `waterwheel-proxy` mounts. There's one per audience the pod's bindings need, and the kubelet replaces them before they expire.
+
+2. `waterwheel-proxy`, a sidecar in the same pod, asks `waterwheel-controller` for its bindings. It proves who it is with its token, which the controller checks with a TokenReview.
+
+3. The app sends its request through `HTTPS_PROXY`, which the injector set. It has no key.
+
+4. The proxy exchanges the service account token at Anthropic for a short-lived token.
+
+5. Anthropic checks the token's signature against the cluster's published keys, and that its subject is `system:serviceaccount:support:support-bot`.
+
+6. The proxy adds the token to the request and sends it on.
+
+</Steps>
+
+## The example in code
+
+### The app
+
+Ordinary SDK code, with no Waterwheel library and no key. The SDK picks up the proxy and the CA bundle from `HTTPS_PROXY` and `SSL_CERT_FILE`, which the injector sets.
+
+```python
+import anthropic
+
+# There's no API key in the pod. The SDK needs some value to send;
+# waterwheel-proxy removes it and adds a short-lived token instead.
+client = anthropic.Anthropic(api_key="unused")
+
+
+def answer(ticket: str) -> str:
+    response = client.beta.messages.create(
+        model="claude-opus-5-5",
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        system="You answer customer support tickets for Example Corp. Be brief and friendly.",
+        messages=[{"role": "user", "content": ticket}],
+    )
+    if response.stop_reason == "refusal":
+        return "A person from our team will follow up on this one."
+    return "".join(block.text for block in response.content if block.type == "text")
+```
+
+### The Waterwheel objects
+
+Two objects say which credential the pod's service account gets, and for which destinations. A namespace label turns the sidecar on.
+
+```yaml
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: anthropic, namespace: support}
+spec:
+  anthropic:
+    organizationId: 3f1c2a4e-8b7d-4c6a-9e2f-1a2b3c4d5e6f
+    workspaceId: default
+    serviceAccountId: svac_01Example
+    federationRuleId: fdrl_01Example
+---
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: support-bot-anthropic, namespace: support}
+spec:
+  workloadID: ns/support/sa/support-bot   # pods running as this service account
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations:
+      - host: api.anthropic.com
+```
+
+```bash
+kubectl label namespace support waterwheel.riptides.io/inject=enabled
+```
+
+## What you get
+
+<Features>
+  <Feature title="No keys in pods" icon="lock">
+    The app container gets no key, no token and no socket. A shell in the pod finds nothing to steal.
+  </Feature>
+  <Feature title="Nothing extra to run" icon="node">
+    Kubernetes signs and rotates the identity tokens, so there's no agent on the nodes. SPIFFE identities from SPIRE are planned for finer-grained identities.
+  </Feature>
+  <Feature title="Namespaces are the boundary" icon="shield">
+    A binding only applies to service accounts in its own namespace. This is checked at admission and again when the controller hands out bindings.
+  </Feature>
+  <Feature title="Many token endpoints" icon="exchange">
+    Anthropic, OpenAI, Google Cloud and Microsoft Entra ID (Azure) federation, and any RFC 7523 or RFC 8693 endpoint. AWS is next.
+  </Feature>
+  <Feature title="Trust without setup" icon="trust">
+    The sidecar's CA goes into the pod's system trust store and the usual environment variables, so curl, Python, Node.js and Go accept it.
+  </Feature>
+  <Feature title="Open source" icon="code">
+    Apache-2.0. Token exchange runs on [tokenex](https://github.com/riptideslabs/tokenex), our open-source exchange library.
+  </Feature>
+</Features>
+
+<p class="ww-built">Waterwheel is built by <a href="https://riptides.io">Riptides</a>.</p>

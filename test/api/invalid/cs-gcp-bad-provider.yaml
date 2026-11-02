@@ -1,0 +1,7 @@
+# expect: spec.gcp.oidcProviderId
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: gcp-provider, namespace: api-check}
+spec:
+  gcp:
+    oidcProviderId: projects/123456789012/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc

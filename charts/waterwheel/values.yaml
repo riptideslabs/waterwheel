@@ -1,0 +1,70 @@
+identity:
+  # What the proxy presents to providers:
+  #   serviceAccountToken  the pod's projected service account token (default)
+  #   spire                a JWT-SVID from SPIRE (not implemented yet)
+  #   waterwheel           a JWT-SVID from Waterwheel's own agent (not implemented yet)
+  source: serviceAccountToken
+
+# SPIFFE sources only: SVIDs are spiffe://<trustDomain>/<workloadID>, and the
+# trust domain must match SPIRE's.
+trustDomain: ""
+
+# spire source only.
+spire:
+  # The spire-controller-manager class that Waterwheel's ClusterSPIFFEIDs carry
+  # (SPIRE chart: spire-server.controllerManager.className).
+  className: waterwheel
+  # The SPIFFE CSI driver that mounts the agent's socket into the sidecar.
+  csiDriver: csi.spiffe.io
+
+# waterwheel source only: the iss claim of every JWT-SVID, and the URL OIDC
+# discovery is served under. With SPIRE, set global.spire.jwtIssuer there.
+issuer: ""
+
+image:
+  # Prefix of the image names, e.g. ghcr.io/riptideslabs/. Empty for images
+  # loaded into kind.
+  registry: ""
+  tag: dev
+  pullPolicy: IfNotPresent
+
+controller:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# waterwheel source only.
+agent:
+  # Host directory for the Workload API socket.
+  socketDir: /run/waterwheel/sockets
+  # Run on every node, tainted ones included, so every pod that gets
+  # waterwheel-proxy has an agent on its node.
+  tolerations:
+  - operator: Exists
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+
+injection:
+  # Pods in namespaces with this label set to "enabled" get waterwheel-proxy.
+  namespaceLabel: waterwheel.riptides.io/inject
+
+# PEM CAs that injected proxies trust upstream and add to the app's CA bundle:
+# a corporate TLS proxy's, or a private provider's. Becomes the
+# waterwheel-extra-roots ConfigMap (key ca.crt). Use --set-file extraRoots=ca.pem.
+extraRoots: ""
+
+# waterwheel source only. For service account tokens and SPIRE, see docs/oidc.md.
+oidc:
+  # Expose OIDC discovery and the JWKS (only those two paths) through an
+  # Ingress. issuer must then be https://<host>[/path]. See docs/oidc.md.
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    # The certificate must be publicly trusted, e.g.
+    # [{secretName: waterwheel-oidc-tls, hosts: [oidc.example.com]}]
+    tls: []

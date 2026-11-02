@@ -1,0 +1,197 @@
+{{- $source := .Values.identity.source }}
+{{- if not (has $source (list "serviceAccountToken" "spire" "waterwheel")) }}
+{{- fail (printf "identity.source must be serviceAccountToken, spire or waterwheel, not %q" $source) }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waterwheel-controller
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["core.riptides.io"]
+  resources: ["workloadidentities", "credentialsources", "credentialbindings"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["core.riptides.io"]
+  resources: ["workloadidentities/status", "credentialsources/status", "credentialbindings/status"]
+  verbs: ["update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# Bindings API: find out which pod is asking from its projected token.
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+# Write its CA into its own webhook configuration, nothing else.
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["mutatingwebhookconfigurations"]
+  resourceNames: ["waterwheel-injector"]
+  verbs: ["get", "patch"]
+{{- if eq $source "spire" }}
+# One ClusterSPIFFEID per WorkloadIdentity selector entry.
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterspiffeids"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}
+{{- if eq $source "waterwheel" }}
+# Sign only for pods on the requesting agent's node.
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: waterwheel-controller
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: waterwheel-controller
+---
+# The serving certificate (webhook and bindings API), leader election, and
+# with the waterwheel source the signing keys and the agents' trust bundle; this
+# namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["waterwheel-tls"{{ if eq $source "waterwheel" }}, "waterwheel-keys"{{ end }}]
+  verbs: ["get", "watch", "update"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["waterwheel-extra-roots"]
+  verbs: ["get"]
+{{- if eq $source "waterwheel" }}
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["waterwheel-bundle"]
+  verbs: ["get", "update"]
+{{- end }}
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: waterwheel-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "waterwheel.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: waterwheel-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: controller
+        image: {{ include "waterwheel.image" (dict "root" . "name" "waterwheel-controller") }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args:
+        - --identity-source={{ $source }}
+        - --proxy-image={{ include "waterwheel.image" (dict "root" . "name" "waterwheel-proxy") }}
+        - --proxy-pull-policy={{ .Values.image.pullPolicy }}
+        {{- if ne $source "serviceAccountToken" }}
+        - --trust-domain={{ required "set trustDomain" .Values.trustDomain }}
+        {{- end }}
+        {{- if eq $source "spire" }}
+        - --spire-class-name={{ .Values.spire.className }}
+        {{- end }}
+        {{- if eq $source "waterwheel" }}
+        - --issuer={{ required "set issuer" .Values.issuer }}
+        {{- end }}
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - {name: api, containerPort: 8443}
+        - {name: webhook, containerPort: 9443}
+        - {name: health, containerPort: 8082}
+        {{- if eq $source "waterwheel" }}
+        - {name: oidc, containerPort: 8080}
+        {{- end }}
+        readinessProbe:
+          httpGet: {path: /readyz, port: health}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /healthz, port: health}
+          periodSeconds: 10
+        resources: {{- toYaml .Values.controller.resources | nindent 10 }}
+        securityContext:
+          runAsUser: 65532
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waterwheel-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: controller
+  ports:
+  - {name: api, port: 8443, targetPort: api}
+  - {name: webhook, port: 443, targetPort: webhook}
+  {{- if eq $source "waterwheel" }}
+  - {name: oidc, port: 8080, targetPort: oidc}
+  {{- end }}

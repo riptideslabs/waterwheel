@@ -1,0 +1,41 @@
+# Namespaces are the trust boundary: outside {{ .Release.Namespace }}, an
+# identity or binding may only use SPIFFE IDs under ns/<its namespace>/, and an
+# identity may only select pods in its own namespace. The agent and the
+# controller enforce the same rules again, so deleting this policy doesn't
+# open the boundary.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: waterwheel-namespace-boundary
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["core.riptides.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["workloadidentities", "credentialbindings"]
+  variables:
+  - name: system
+    expression: "request.namespace == '{{ .Release.Namespace }}'"
+  - name: id
+    expression: "object.spec.workloadID"
+  validations:
+  - expression: "!variables.id.startsWith('waterwheel/')"
+    message: "workloadID: the waterwheel/ prefix is reserved for Waterwheel's own identities"
+  - expression: "variables.system || variables.id.startsWith('ns/' + request.namespace + '/')"
+    messageExpression: "'workloadID must start with ns/' + request.namespace + '/'"
+  - expression: >-
+      variables.system || !has(object.spec.selectors) ||
+      object.spec.selectors.all(s, !('k8s:pod:namespace' in s) || string(s['k8s:pod:namespace']) == request.namespace)
+    messageExpression: "'selectors may only match pods in namespace ' + request.namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: waterwheel-namespace-boundary
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+spec:
+  policyName: waterwheel-namespace-boundary
+  validationActions: ["Deny"]

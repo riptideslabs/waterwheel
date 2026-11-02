@@ -1,0 +1,8 @@
+# expect: unknown selector key
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: unknown-key, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  selectors:
+  - "k8s:pod:sa": x

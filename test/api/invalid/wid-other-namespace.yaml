@@ -1,0 +1,8 @@
+# expect: selectors may only match pods in namespace api-check
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: other-namespace, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/payments
+  selectors:
+  - "k8s:pod:namespace": billing

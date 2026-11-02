@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  # Lima forwards this port to the Mac, so kubectl runs there. 7543, not the
+  # kcd-demo cluster's 7443.
+  apiServerAddress: 127.0.0.1
+  apiServerPort: 7543
+nodes:
+- role: control-plane
+- role: worker

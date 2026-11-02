@@ -1,0 +1,10 @@
+# Lima VM that runs Docker for the kind cluster (`make vm`). The repo
+# is mounted at the same path, so scripts can run on either side.
+base:
+- template:docker-rootful
+cpus: 4
+memory: 4GiB
+disk: 30GiB
+param:
+  # `kind load` can't import multi-arch images from the containerd image store.
+  containerdSnapshotter: false

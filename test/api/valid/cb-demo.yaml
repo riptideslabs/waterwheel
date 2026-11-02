@@ -1,0 +1,14 @@
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: support-bot-anthropic, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/support-bot
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations:
+      - host: api.anthropic.com
+      - host: "*.example.com"
+        port: 8443
+      header: X-Api-Token
+      scheme: "-"

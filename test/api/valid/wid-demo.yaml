@@ -1,0 +1,8 @@
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: support-bot, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/support-bot
+  selectors:
+  - "k8s:pod:serviceaccount": support-bot
+    "k8s:container:name": waterwheel-proxy

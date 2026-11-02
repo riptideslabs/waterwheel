@@ -1,0 +1,8 @@
+# expect: should have at least 1 properties
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: empty-selector, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  selectors:
+  - {}

@@ -1,0 +1,104 @@
+---
+// The hero's waterwheel: it turns slowly while the water drifts under it.
+// Both stop for visitors who prefer reduced motion.
+const paddles = Array.from({ length: 12 }, (_, i) => i * 30);
+const spokes = Array.from({ length: 6 }, (_, i) => i * 30);
+
+// A filled wave with period len, wider than the view so it can slide by one period.
+function wave(y: number, amp: number, len: number) {
+  let d = `M-200 ${y}`;
+  for (let x = -200; x < 600; x += len) d += ` q${len / 4} ${-amp} ${len / 2} 0 t${len / 2} 0`;
+  return `${d} V400 H-200 Z`;
+}
+---
+
+<svg class="ww-wheel" viewBox="0 0 400 400" aria-hidden="true">
+  <defs>
+    <radialGradient id="ww-glow">
+      <stop offset="0" class="glow-in"></stop>
+      <stop offset="1" class="glow-out"></stop>
+    </radialGradient>
+    <linearGradient id="ww-water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" class="water-top"></stop>
+      <stop offset=".6" class="water-mid"></stop>
+      <stop offset="1" class="water-bottom"></stop>
+    </linearGradient>
+    <linearGradient id="ww-paddle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" class="paddle-out"></stop>
+      <stop offset="1" class="paddle-in"></stop>
+    </linearGradient>
+    <linearGradient id="ww-fade-g">
+      <stop offset="0" stop-color="#000"></stop>
+      <stop offset=".22" stop-color="#fff"></stop>
+      <stop offset=".78" stop-color="#fff"></stop>
+      <stop offset="1" stop-color="#000"></stop>
+    </linearGradient>
+    <mask id="ww-fade"><rect width="400" height="400" fill="url(#ww-fade-g)"></rect></mask>
+  </defs>
+
+  <circle cx="200" cy="180" r="195" fill="url(#ww-glow)"></circle>
+
+  <g mask="url(#ww-fade)">
+    <path class="water back" d={wave(282, 7, 100)}></path>
+  </g>
+
+  <g transform="translate(200 175)">
+    <g class="spin">
+      {spokes.map((a) => <line x1="-98" x2="98" class="spoke" transform={`rotate(${a})`}></line>)}
+      <circle r="98" class="ring"></circle>
+      <circle r="112" class="rim"></circle>
+      {paddles.map((a) => <rect x="-12" y="-152" width="24" height="42" rx="4" class="paddle" transform={`rotate(${a})`}></rect>)}
+      <circle r="21" class="hub"></circle>
+      <circle r="7" class="hub-in"></circle>
+    </g>
+  </g>
+
+  <g mask="url(#ww-fade)">
+    <path class="water front" d={wave(296, 8, 80)}></path>
+  </g>
+</svg>
+
+<style>
+  .ww-wheel {
+    display: block;
+    width: min(70%, 16rem);
+    height: auto;
+    margin-inline: auto;
+  }
+  @media (min-width: 50rem) {
+    .ww-wheel { width: min(100%, 26rem); }
+  }
+
+  .glow-in { stop-color: var(--sl-color-accent); stop-opacity: var(--ww-glow); }
+  .glow-out { stop-color: var(--sl-color-accent); stop-opacity: 0; }
+  .water-top { stop-color: var(--sl-color-accent); stop-opacity: 0.5; }
+  .water-mid { stop-color: var(--sl-color-accent); stop-opacity: 0.12; }
+  .water-bottom { stop-color: var(--sl-color-accent); stop-opacity: 0; }
+  .paddle-out { stop-color: var(--sl-color-accent-high); }
+  .paddle-in { stop-color: var(--sl-color-accent); }
+
+  .rim { fill: none; stroke: var(--sl-color-accent); stroke-width: 7; }
+  .ring { fill: none; stroke: var(--sl-color-accent); stroke-width: 1.5; opacity: 0.35; }
+  .spoke { stroke: var(--sl-color-accent); stroke-width: 3; stroke-linecap: round; opacity: 0.75; }
+  .paddle { fill: url(#ww-paddle); }
+  .hub { fill: var(--sl-color-accent); }
+  .hub-in { fill: var(--sl-color-black); }
+  .water { fill: url(#ww-water); }
+  .water.back { opacity: 0.55; }
+
+  .spin {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ww-spin 48s linear infinite;
+  }
+  .water.front { animation: ww-drift 5s linear infinite; }
+  .water.back { animation: ww-drift-back 8s linear infinite; }
+
+  @keyframes ww-spin { to { transform: rotate(360deg); } }
+  @keyframes ww-drift { to { transform: translateX(-80px); } }
+  @keyframes ww-drift-back { from { transform: translateX(-100px); } to { transform: translateX(0); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spin, .water.front, .water.back { animation: none; }
+  }
+</style>

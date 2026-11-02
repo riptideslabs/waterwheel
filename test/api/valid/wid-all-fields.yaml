@@ -1,0 +1,13 @@
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: all-fields, namespace: api-check}
+spec:
+  workloadID: ns/api-check/app/worker
+  selectors:
+  - "k8s:label:app": worker
+    "k8s:pod:namespace": api-check
+    "process:uid": 1000
+  - "process:gid": 1000
+  svid:
+    x509: {ttl: 2h, dnsNames: [worker.api-check.svc]}
+    jwt: {ttl: 300s}

@@ -1,0 +1,11 @@
+# expect: must not be a message-framing or connection header
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: framing, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations: [{host: api.anthropic.com}]
+      header: Content-Length

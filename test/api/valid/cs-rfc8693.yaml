@@ -1,0 +1,8 @@
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: fake-sts, namespace: api-check}
+spec:
+  rfc8693:
+    tokenEndpointUrl: https://sts.fake.waterwheel.test/token
+    subjectTokenType: SUBJECT_TOKEN_TYPE_JWT
+    idTokenAudience: [fake.waterwheel.test]

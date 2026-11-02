@@ -1,0 +1,26 @@
+# Namespace admins and editors manage Waterwheel objects in their own namespace;
+# the policy in policy.yaml keeps them to that namespace's identities.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waterwheel-edit
+  labels:
+    {{- include "waterwheel.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+- apiGroups: ["core.riptides.io"]
+  resources: ["workloadidentities", "credentialsources", "credentialbindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waterwheel-view
+  labels:
+    {{- include "waterwheel.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+- apiGroups: ["core.riptides.io"]
+  resources: ["workloadidentities", "credentialsources", "credentialbindings"]
+  verbs: ["get", "list", "watch"]

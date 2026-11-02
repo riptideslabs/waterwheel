@@ -1,0 +1,8 @@
+# expect: the waterwheel/ prefix is reserved
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: reserved, namespace: waterwheel-system}
+spec:
+  workloadID: waterwheel/agent/node-1
+  selectors:
+  - "k8s:pod:serviceaccount": anything

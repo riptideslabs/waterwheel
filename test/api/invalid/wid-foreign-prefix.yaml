@@ -1,0 +1,8 @@
+# expect: workloadID must start with ns/api-check/
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: foreign-prefix, namespace: api-check}
+spec:
+  workloadID: ns/billing/sa/payments
+  selectors:
+  - "k8s:pod:serviceaccount": payments

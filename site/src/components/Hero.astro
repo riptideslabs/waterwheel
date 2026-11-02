@@ -1,0 +1,134 @@
+---
+// Replaces Starlight's hero: a status pill, the title and tagline, the
+// actions from the page's frontmatter, and the turning wheel.
+import { LinkButton } from "@astrojs/starlight/components";
+import Wheel from "./Wheel.astro";
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+---
+
+<div class="ww-hero">
+  <div class="copy">
+    <a class="pill" href="https://github.com/riptideslabs/waterwheel/blob/main/docs/milestone-1.md">
+      <span class="dot" aria-hidden="true"></span>
+      Early development · not released yet
+    </a>
+    <h1 id="_top" data-page-title set:html={title} />
+    {tagline && <p class="tagline" set:html={tagline} />}
+    {
+      actions.length > 0 && (
+        <div class="actions">
+          {actions.map(({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+            <LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+              {text}
+              {icon?.html && <Fragment set:html={icon.html} />}
+            </LinkButton>
+          ))}
+        </div>
+      )
+    }
+  </div>
+  <Wheel />
+</div>
+
+<style>
+  .ww-hero {
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    gap: 2.5rem;
+    align-items: center;
+    padding-block: 2.5rem 1.5rem;
+  }
+
+  /* A dot grid that fades out from the middle. */
+  .ww-hero::before {
+    content: "";
+    position: absolute;
+    inset: -4rem -2rem 0;
+    z-index: -1;
+    background: radial-gradient(circle at 1px 1px, var(--ww-dot) 1px, transparent 0) 0 0 / 22px 22px;
+    mask-image: radial-gradient(ellipse 70% 65% at 60% 45%, #000 20%, transparent 75%);
+    pointer-events: none;
+  }
+
+  .copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1.25rem;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.3rem 0.85rem 0.3rem 0.7rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    text-decoration: none;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .pill:hover {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-white);
+  }
+  .dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sl-color-accent) 60%, transparent);
+    animation: pulse 2.4s ease-out infinite;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(2.75rem, 1.5rem + 5vw, 4.75rem);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -0.04em;
+    background: linear-gradient(115deg, var(--sl-color-white) 35%, var(--sl-color-accent) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .tagline {
+    margin: 0;
+    max-width: 34rem;
+    font-size: clamp(var(--sl-text-base), 0.9rem + 0.6vw, var(--sl-text-xl));
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sl-color-accent) 55%, transparent); }
+    70%, 100% { box-shadow: 0 0 0 0.45rem transparent; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot { animation: none; }
+  }
+
+  @media (min-width: 50rem) {
+    .ww-hero {
+      grid-template-columns: 7fr 5fr;
+      gap: 3rem;
+      padding-block: clamp(3rem, 1rem + 8vmin, 7rem) clamp(2rem, 1rem + 4vmin, 4rem);
+    }
+  }
+</style>

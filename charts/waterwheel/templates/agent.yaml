@@ -1,0 +1,111 @@
+{{- if eq .Values.identity.source "waterwheel" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waterwheel-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waterwheel-agent
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+rules:
+# The kubelet's /pods, with fine-grained kubelet authorization instead of
+# nodes/proxy.
+- apiGroups: [""]
+  resources: ["nodes/pods"]
+  verbs: ["get"]
+- apiGroups: ["core.riptides.io"]
+  resources: ["workloadidentities", "credentialsources", "credentialbindings"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: waterwheel-agent
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: waterwheel-agent
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: waterwheel-agent
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: waterwheel-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "waterwheel.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "waterwheel.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: waterwheel-agent
+      # SO_PEERCRED PIDs must be the node's PIDs.
+      hostPID: true
+      {{- with .Values.agent.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: agent
+        image: {{ include "waterwheel.image" (dict "root" . "name" "waterwheel-agent") }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args:
+        - --socket=/run/waterwheel/agent.sock
+        - --controller=waterwheel-controller.{{ .Release.Namespace }}.svc:8443
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - {name: health, containerPort: 8082}
+        readinessProbe:
+          httpGet: {path: /healthz, port: health}
+          periodSeconds: 5
+        resources: {{- toYaml .Values.agent.resources | nindent 10 }}
+        securityContext:
+          runAsUser: 0
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+            # readlink /proc/<pid>/exe of other users' processes.
+            add: ["SYS_PTRACE"]
+        volumeMounts:
+        - {name: sockets, mountPath: /run/waterwheel}
+        - {name: controller-token, mountPath: /run/secrets/waterwheel, readOnly: true}
+        - {name: bundle, mountPath: /run/waterwheel-bundle, readOnly: true}
+      volumes:
+      - name: sockets
+        hostPath:
+          path: {{ .Values.agent.socketDir }}
+          type: DirectoryOrCreate
+      # Bootstrap: a short-lived token only the controller accepts.
+      - name: controller-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              audience: waterwheel-controller
+              expirationSeconds: 600
+      # Trust for the controller's agent API; the controller keeps it current.
+      - name: bundle
+        configMap:
+          name: waterwheel-bundle
+          optional: true
+{{- end }}

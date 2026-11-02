@@ -1,0 +1,185 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package proxy_test
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"sync/atomic"
+	"testing"
+
+	"go.riptides.io/waterwheel/api/v1alpha1"
+	"go.riptides.io/waterwheel/internal/bindings"
+	"go.riptides.io/waterwheel/internal/proxy"
+)
+
+const testIdentity = "ns/support/sa/bot"
+
+var errDenied = errors.New("status 401: denied")
+
+type staticTokens struct {
+	tok string
+	err error
+}
+
+func (s staticTokens) Get(context.Context) (string, error) { return s.tok, s.err }
+
+// echo answers with the request's credential headers.
+func echo(w http.ResponseWriter, r *http.Request) {
+	err := json.NewEncoder(w).Encode(map[string]string{
+		"authorization": r.Header.Get("Authorization"),
+		"x-api-key":     r.Header.Get("X-Api-Key"),
+		"path":          r.URL.Path,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type setup struct {
+	proxy  *proxy.Proxy
+	client *http.Client
+	bound  *httptest.Server
+	other  *httptest.Server
+	starts atomic.Int32
+}
+
+// newSetup runs a proxy with two upstream servers: bound gets the binding's
+// token, other is passed through.
+func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
+	t.Helper()
+
+	s := &setup{}
+	s.bound = httptest.NewTLSServer(http.HandlerFunc(echo))
+	s.other = httptest.NewTLSServer(http.HandlerFunc(echo))
+	t.Cleanup(s.bound.Close)
+	t.Cleanup(s.other.Close)
+
+	ca, err := proxy.LoadOrCreateCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.proxy = proxy.New(ca, t.TempDir())
+	// The proxy trusts the bound test server's certificate upstream.
+	s.proxy.Upstream = s.bound.Client().Transport
+	s.proxy.NewTokens = func(context.Context, bindings.Binding) proxy.Tokens {
+		s.starts.Add(1)
+
+		return tokens
+	}
+
+	p := httptest.NewServer(s.proxy)
+	t.Cleanup(p.Close)
+
+	// The app trusts the pod CA (for intercepted hosts) and the passed-through
+	// server's own certificate.
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Cert)
+	roots.AddCert(s.other.Certificate())
+
+	proxyURL, _ := url.Parse(p.URL)
+	s.client = &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+	}}
+
+	s.proxy.Update(t.Context(), snapshot(t, s.bound.URL))
+
+	return s
+}
+
+func snapshot(t *testing.T, boundURL string) bindings.Snapshot {
+	t.Helper()
+
+	u, _ := url.Parse(boundURL)
+	host, port, _ := net.SplitHostPort(u.Host)
+	p, _ := strconv.Atoi(port)
+
+	return bindings.Snapshot{Identity: testIdentity, Bindings: []bindings.Binding{{
+		Namespace:    "support",
+		Name:         "bot-anthropic",
+		Provider:     v1alpha1.CredentialSourceSpec{Anthropic: &v1alpha1.AnthropicWIFCredentialProvider{}},
+		Audience:     "https://api.anthropic.com",
+		Destinations: []v1alpha1.Destination{{Host: host, Port: int32(p)}},
+		Header:       "Authorization",
+		Scheme:       "Bearer",
+	}}}
+}
+
+func call(t *testing.T, c *http.Client, target string) (int, map[string]string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, target+"/v1/messages", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("X-Api-Key", "sk-placeholder")
+	req.Header.Set("Authorization", "Bearer unused")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	got := map[string]string{}
+	_ = json.Unmarshal(body, &got)
+
+	return resp.StatusCode, got
+}
+
+func TestInterceptAddsToken(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: "tok-1"})
+
+	status, got := call(t, s.client, s.bound.URL)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+
+	if got["authorization"] != "Bearer tok-1" || got["x-api-key"] != "" || got["path"] != "/v1/messages" {
+		t.Errorf("upstream saw %v; want the binding's token, no key", got)
+	}
+
+	// An unchanged snapshot keeps the binding's credentials running.
+	s.proxy.Update(t.Context(), snapshot(t, s.bound.URL))
+
+	if n := s.starts.Load(); n != 1 {
+		t.Errorf("credentials started %d times; want 1", n)
+	}
+}
+
+func TestPassThrough(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: "tok-1"})
+
+	status, got := call(t, s.client, s.other.URL)
+	if status != http.StatusOK || got["authorization"] != "Bearer unused" || got["x-api-key"] != "sk-placeholder" {
+		t.Errorf("status %d, upstream saw %v; want the app's own headers, untouched", status, got)
+	}
+}
+
+func TestNoToken(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{err: errDenied})
+
+	status, got := call(t, s.client, s.bound.URL)
+	if status != http.StatusForbidden || got["authorization"] != "" {
+		t.Errorf("status %d, body %v; want 403 without reaching upstream", status, got)
+	}
+}

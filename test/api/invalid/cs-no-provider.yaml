@@ -1,0 +1,5 @@
+# expect: set exactly one provider
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: none, namespace: api-check}
+spec: {}

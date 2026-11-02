@@ -1,0 +1,61 @@
+# A test-only provider: an RFC 8693 token endpoint and an Anthropic-shaped API
+# (test/e2e/fakeprovider). CoreDNS sends *.fake.waterwheel.test here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: waterwheel-e2e
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fake-provider
+  namespace: waterwheel-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-provider
+  namespace: waterwheel-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fake-provider}
+  template:
+    metadata:
+      labels: {app: fake-provider}
+    spec:
+      serviceAccountName: fake-provider
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: fake-provider
+        image: waterwheel-e2e-fakeprovider:dev
+        imagePullPolicy: IfNotPresent
+        env:
+        - {name: AUDIENCE, value: "https://sts.fake.waterwheel.test/token"}
+        - {name: ALLOWED_SUBJECTS, value: "system:serviceaccount:support:support-bot"}
+        ports:
+        - containerPort: 8443
+        readinessProbe:
+          tcpSocket: {port: 8443}
+          periodSeconds: 2
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities: {drop: ["ALL"]}
+        volumeMounts:
+        - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+      - name: tls
+        secret: {secretName: fake-provider-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-provider
+  namespace: waterwheel-e2e
+spec:
+  selector: {app: fake-provider}
+  ports:
+  - {port: 443, targetPort: 8443}

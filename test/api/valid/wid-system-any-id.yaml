@@ -1,0 +1,8 @@
+# The Waterwheel namespace may use any ID and select pods anywhere.
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: shared, namespace: waterwheel-system}
+spec:
+  workloadID: shared/billing
+  selectors:
+  - "k8s:pod:namespace": billing

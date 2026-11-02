@@ -1,0 +1,6 @@
+# expect: spec.rfc8693.tokenEndpointUrl
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: http, namespace: api-check}
+spec:
+  rfc8693: {tokenEndpointUrl: "http://sts.example.com/token"}

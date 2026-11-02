@@ -1,0 +1,10 @@
+# expect: should have at least 1 items
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: no-destinations, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations: []

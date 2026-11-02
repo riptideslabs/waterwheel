@@ -1,0 +1,9 @@
+# expect: unknown selector key
+# process:name comes back with Waterwheel's own agent; SPIRE has no equivalent.
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: process-name, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  selectors:
+  - "process:name": curl

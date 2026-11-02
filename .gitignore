@@ -1,0 +1,6 @@
+/bin/
+/.state/
+providers.env
+/site/node_modules/
+/site/dist/
+/site/.astro/

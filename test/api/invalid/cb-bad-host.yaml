@@ -1,0 +1,10 @@
+# expect: spec.propagation.injection.destinations[0].host
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: bad-host, namespace: api-check}
+spec:
+  workloadID: ns/api-check/sa/x
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations: [{host: "*"}]

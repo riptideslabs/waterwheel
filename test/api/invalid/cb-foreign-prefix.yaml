@@ -1,0 +1,10 @@
+# expect: workloadID must start with ns/api-check/
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialBinding
+metadata: {name: foreign, namespace: api-check}
+spec:
+  workloadID: ns/billing/sa/payments
+  credentialSource: anthropic
+  propagation:
+    injection:
+      destinations: [{host: api.anthropic.com}]

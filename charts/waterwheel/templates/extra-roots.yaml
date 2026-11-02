@@ -1,0 +1,13 @@
+{{- with .Values.extraRoots }}
+# CAs that injected proxies trust upstream and add to the app's CA bundle, on
+# top of the public roots: a corporate TLS proxy's, or a private provider's.
+# New pods pick up changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waterwheel-extra-roots
+  namespace: {{ $.Release.Namespace }}
+  labels: {{- include "waterwheel.labels" $ | nindent 4 }}
+data:
+  ca.crt: {{ . | quote }}
+{{- end }}

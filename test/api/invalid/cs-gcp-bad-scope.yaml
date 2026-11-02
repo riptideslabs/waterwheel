@@ -1,0 +1,8 @@
+# expect: spec.gcp.scopes[0]
+apiVersion: core.riptides.io/v1alpha1
+kind: CredentialSource
+metadata: {name: gcp-scope, namespace: api-check}
+spec:
+  gcp:
+    oidcProviderId: //iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc
+    scopes: [cloud-platform]

@@ -1,0 +1,40 @@
+{{- with .Values.oidc.ingress }}
+{{- if and .enabled (eq $.Values.identity.source "waterwheel") }}
+{{- $origin := printf "https://%s" (required "set oidc.ingress.host" .host) }}
+{{- $issuer := trimSuffix "/" $.Values.issuer }}
+{{- if not (or (eq $issuer $origin) (hasPrefix (printf "%s/" $origin) $issuer)) }}
+{{- fail (printf "issuer %q must be %s or start with %s/" $.Values.issuer $origin $origin) }}
+{{- end }}
+{{- $prefix := trimPrefix $origin $issuer }}
+# Exposes OIDC discovery and the JWKS, and nothing else of the controller.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: waterwheel-oidc
+  namespace: {{ $.Release.Namespace }}
+  labels: {{- include "waterwheel.labels" $ | nindent 4 }}
+  {{- with .annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .tls }}
+  tls: {{- toYaml . | nindent 2 }}
+  {{- end }}
+  rules:
+  - host: {{ .host }}
+    http:
+      paths:
+      {{- range list "/.well-known/openid-configuration" "/keys" }}
+      - path: {{ $prefix }}{{ . }}
+        pathType: Exact
+        backend:
+          service:
+            name: waterwheel-controller
+            port:
+              name: oidc
+      {{- end }}
+{{- end }}
+{{- end }}
