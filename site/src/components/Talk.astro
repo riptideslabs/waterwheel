@@ -40,11 +40,9 @@ const steps = [
     gap: 1.75rem;
     margin-block: 1.5rem;
     padding: 1.75rem;
-    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 35%, var(--sl-color-gray-5));
-    border-radius: 1rem;
-    background:
-      radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--sl-color-accent) 12%, transparent), transparent 60%),
-      var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
   }
 
   .about {
@@ -64,15 +62,12 @@ const steps = [
     color: var(--sl-color-gray-2);
   }
   .tag {
-    padding: 0.15rem 0.55rem;
-    border-radius: 999px;
-    background: var(--sl-color-accent-low);
-    color: var(--sl-color-accent-high);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+    padding: 0.05rem 0.4rem;
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 50%, transparent);
+    border-radius: 0.25rem;
+    color: var(--sl-color-text-accent);
     font-size: var(--sl-text-2xs);
-    font-weight: 650;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-weight: 600;
   }
 
   .title {
@@ -114,8 +109,8 @@ const steps = [
     gap: 0.75rem;
     padding: 0.6rem 0.8rem;
     border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.75rem;
-    background: color-mix(in srgb, var(--sl-color-black) 55%, transparent);
+    border-radius: 0.375rem;
+    background: var(--sl-color-black);
     font-size: var(--sl-text-sm);
     color: var(--sl-color-gray-1);
   }
@@ -128,7 +123,6 @@ const steps = [
     border-radius: 50%;
     background: var(--sl-color-accent-low);
     color: var(--sl-color-accent-high);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 50%, transparent);
     font-size: var(--sl-text-xs);
     font-weight: 650;
   }

@@ -1,70 +1,29 @@
 ---
-// One card in a <Features> grid, with a small stroke icon.
+// One card in a <Features> grid.
 interface Props {
   title: string;
-  icon: keyof typeof icons;
 }
 
-const icons = {
-  lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><path d="M12 14.5v2.5"/>',
-  node: '<path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z"/><path d="m8.7 12.2 2.3 2.3 4.3-4.6"/>',
-  shield: '<path d="M12 3 19 6v5.3c0 4.4-2.9 8.1-7 9.7-4.1-1.6-7-5.3-7-9.7V6z"/><path d="M9 12h6"/>',
-  exchange: '<path d="M4 8.5h14"/><path d="m14.5 5 3.5 3.5-3.5 3.5"/><path d="M20 15.5H6"/><path d="M9.5 12 6 15.5 9.5 19"/>',
-  trust: '<circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.3 2.4 2.4 4.6-4.9"/>',
-  code: '<path d="m8.5 7-5 5 5 5"/><path d="m15.5 7 5 5-5 5"/><path d="m13.5 4.5-3 15"/>',
-};
-
-const { title, icon } = Astro.props;
+const { title } = Astro.props;
 ---
 
 <div class="ww-feature">
-  <span class="icon" aria-hidden="true">
-    <svg viewBox="0 0 24 24" set:html={icons[icon]} />
-  </span>
   <h3>{title}</h3>
   <div class="body"><slot /></div>
 </div>
 
 <style>
   .ww-feature {
-    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    padding: 1.5rem;
+    gap: 0.5rem;
+    padding: 1.25rem;
     border: 1px solid var(--sl-color-gray-5);
-    border-radius: 1rem;
-    background: linear-gradient(180deg, var(--sl-color-gray-6), color-mix(in srgb, var(--sl-color-gray-6) 30%, transparent));
-    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
-  }
-  .ww-feature:hover {
-    border-color: color-mix(in srgb, var(--sl-color-accent) 55%, var(--sl-color-gray-5));
-    transform: translateY(-2px);
-    box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
-  }
-
-  .icon {
-    display: grid;
-    place-items: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 0.75rem;
-    background: var(--sl-color-accent-low);
-    color: var(--sl-color-accent-high);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 35%, transparent);
-  }
-  .icon svg {
-    width: 1.3rem;
-    height: 1.3rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+    border-radius: 0.5rem;
   }
 
   h3 {
-    margin: 0.4rem 0 0;
+    margin: 0;
     font-size: var(--sl-text-lg);
     font-weight: 600;
     letter-spacing: -0.01em;
@@ -78,8 +37,4 @@ const { title, icon } = Astro.props;
     color: var(--sl-color-gray-2);
   }
   .body :global(a) { color: var(--sl-color-text-accent); }
-
-  @media (prefers-reduced-motion: reduce) {
-    .ww-feature, .ww-feature:hover { transition: none; transform: none; }
-  }
 </style>

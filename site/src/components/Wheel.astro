@@ -14,10 +14,6 @@ function wave(y: number, amp: number, len: number) {
 
 <svg class="ww-wheel" viewBox="0 0 400 400" aria-hidden="true">
   <defs>
-    <radialGradient id="ww-glow">
-      <stop offset="0" class="glow-in"></stop>
-      <stop offset="1" class="glow-out"></stop>
-    </radialGradient>
     <linearGradient id="ww-water" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" class="water-top"></stop>
       <stop offset=".6" class="water-mid"></stop>
@@ -35,8 +31,6 @@ function wave(y: number, amp: number, len: number) {
     </linearGradient>
     <mask id="ww-fade"><rect width="400" height="400" fill="url(#ww-fade-g)"></rect></mask>
   </defs>
-
-  <circle cx="200" cy="180" r="195" fill="url(#ww-glow)"></circle>
 
   <g mask="url(#ww-fade)">
     <path class="water back" d={wave(282, 7, 100)}></path>
@@ -69,8 +63,6 @@ function wave(y: number, amp: number, len: number) {
     .ww-wheel { width: min(100%, 26rem); }
   }
 
-  .glow-in { stop-color: var(--sl-color-accent); stop-opacity: var(--ww-glow); }
-  .glow-out { stop-color: var(--sl-color-accent); stop-opacity: 0; }
   .water-top { stop-color: var(--sl-color-accent); stop-opacity: 0.5; }
   .water-mid { stop-color: var(--sl-color-accent); stop-opacity: 0.12; }
   .water-bottom { stop-color: var(--sl-color-accent); stop-opacity: 0; }

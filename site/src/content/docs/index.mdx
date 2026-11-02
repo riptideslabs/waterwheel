@@ -126,22 +126,22 @@ kubectl label namespace support waterwheel.riptides.io/inject=enabled
 ## What you get
 
 <Features>
-  <Feature title="No keys in pods" icon="lock">
+  <Feature title="No keys in pods">
     The app container gets no key, no token and no socket. A shell in the pod finds nothing to steal.
   </Feature>
-  <Feature title="Nothing extra to run" icon="node">
+  <Feature title="Nothing extra to run">
     Kubernetes signs and rotates the identity tokens, so there's no agent on the nodes. SPIFFE identities from SPIRE are planned for finer-grained identities.
   </Feature>
-  <Feature title="Namespaces are the boundary" icon="shield">
+  <Feature title="Namespaces are the boundary">
     A binding only applies to service accounts in its own namespace. This is checked at admission and again when the controller hands out bindings.
   </Feature>
-  <Feature title="Many token endpoints" icon="exchange">
+  <Feature title="Many token endpoints">
     Anthropic, OpenAI, Google Cloud and Microsoft Entra ID (Azure) federation, and any RFC 7523 or RFC 8693 endpoint. AWS is next.
   </Feature>
-  <Feature title="Trust without setup" icon="trust">
+  <Feature title="Trust without setup">
     The sidecar's CA goes into the pod's system trust store and the usual environment variables, so curl, Python, Node.js and Go accept it.
   </Feature>
-  <Feature title="Open source" icon="code">
+  <Feature title="Open source">
     Apache-2.0. Token exchange runs on [tokenex](https://github.com/riptideslabs/tokenex), our open-source exchange library.
   </Feature>
 </Features>

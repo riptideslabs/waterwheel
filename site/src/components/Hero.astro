@@ -1,5 +1,5 @@
 ---
-// Replaces Starlight's hero: a status pill, the title and tagline, the
+// Replaces Starlight's hero: a status line, the title and tagline, the
 // actions from the page's frontmatter, and the turning wheel.
 import { LinkButton } from "@astrojs/starlight/components";
 import Wheel from "./Wheel.astro";
@@ -10,8 +10,7 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 
 <div class="ww-hero">
   <div class="copy">
-    <a class="pill" href="#presented-at-kcd-budapest">
-      <span class="dot" aria-hidden="true"></span>
+    <a class="status" href="#presented-at-kcd-budapest">
       Presented at KCD Budapest · early development
     </a>
     <h1 id="_top" data-page-title set:html={title} />
@@ -34,23 +33,10 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
 
 <style>
   .ww-hero {
-    position: relative;
-    isolation: isolate;
     display: grid;
     gap: 2.5rem;
     align-items: center;
     padding-block: 2.5rem 1.5rem;
-  }
-
-  /* A dot grid that fades out from the middle. */
-  .ww-hero::before {
-    content: "";
-    position: absolute;
-    inset: -4rem -2rem 0;
-    z-index: -1;
-    background: radial-gradient(circle at 1px 1px, var(--ww-dot) 1px, transparent 0) 0 0 / 22px 22px;
-    mask-image: radial-gradient(ellipse 70% 65% at 60% 45%, #000 20%, transparent 75%);
-    pointer-events: none;
   }
 
   .copy {
@@ -60,31 +46,16 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
     gap: 1.25rem;
   }
 
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-    padding: 0.3rem 0.85rem 0.3rem 0.7rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
-    color: var(--sl-color-gray-2);
-    font-size: var(--sl-text-xs);
+  .status {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
     font-weight: 500;
     text-decoration: none;
-    transition: border-color 0.2s, color 0.2s;
   }
-  .pill:hover {
-    border-color: var(--sl-color-accent);
+  .status:hover {
     color: var(--sl-color-white);
-  }
-  .dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--sl-color-accent);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sl-color-accent) 60%, transparent);
-    animation: pulse 2.4s ease-out infinite;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
   }
 
   h1 {
@@ -93,10 +64,7 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
     font-weight: 700;
     line-height: 1.02;
     letter-spacing: -0.04em;
-    background: linear-gradient(115deg, var(--sl-color-white) 35%, var(--sl-color-accent) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: var(--sl-color-white);
   }
 
   .tagline {
@@ -113,15 +81,6 @@ const { title = data.title, tagline, actions = [] } = data.hero || {};
     align-items: center;
     gap: 0.75rem;
     margin-top: 0.5rem;
-  }
-
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sl-color-accent) 55%, transparent); }
-    70%, 100% { box-shadow: 0 0 0 0.45rem transparent; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .dot { animation: none; }
   }
 
   @media (min-width: 50rem) {
