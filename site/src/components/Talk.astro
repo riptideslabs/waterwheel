@@ -1,0 +1,143 @@
+---
+// The KCD Budapest talk where we presented the idea, with its demo's five
+// steps (as in the kcd-budapest-demo README), the slides and the demo's code.
+import { LinkButton } from "@astrojs/starlight/components";
+
+const slides = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/talks/kcd-budapest-2026.pdf`;
+
+const steps = [
+  "The pod has no key",
+  "The API call fails",
+  "Turn on the egress proxy",
+  "The same command succeeds",
+  "Nothing to steal",
+];
+---
+
+<div class="ww-talk not-content">
+  <div class="about">
+    <p class="meta"><span class="tag">Talk</span> KCD Budapest · 30 October 2026</p>
+    <p class="title">Every Workload Deserves an Identity Instead of an API Key</p>
+    <p class="speakers">Zsolt Varga and Nándor Krácser, Riptides</p>
+    <p class="note">A live demo on kind: a pod with no key calls Claude, through SPIRE, tokenex and an egress sidecar.</p>
+    <div class="links">
+      <LinkButton href={slides} variant="minimal" icon="document" iconPlacement="start">
+        Slides (PDF)
+      </LinkButton>
+      <LinkButton href="https://github.com/riptideslabs/kcd-budapest-demo" variant="minimal" icon="github" iconPlacement="start">
+        The demo's code
+      </LinkButton>
+    </div>
+  </div>
+  <ol class="demo" aria-label="The demo's five steps">
+    {steps.map((s, i) => <li><span class="n">{i + 1}</span>{s}</li>)}
+  </ol>
+</div>
+
+<style>
+  .ww-talk {
+    display: grid;
+    gap: 1.75rem;
+    margin-block: 1.5rem;
+    padding: 1.75rem;
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 35%, var(--sl-color-gray-5));
+    border-radius: 1rem;
+    background:
+      radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--sl-color-accent) 12%, transparent), transparent 60%),
+      var(--sl-color-gray-6);
+  }
+
+  .about {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .about p { margin: 0; }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    color: var(--sl-color-gray-2);
+  }
+  .tag {
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-accent-high);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+    font-size: var(--sl-text-2xs);
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .title {
+    font-size: clamp(var(--sl-text-xl), 1rem + 1vw, var(--sl-text-2xl));
+    font-weight: 650;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    color: var(--sl-color-white);
+  }
+  .note {
+    font-size: var(--sl-text-sm);
+    line-height: 1.65;
+    color: var(--sl-color-gray-2);
+  }
+  .speakers {
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-gray-1);
+  }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+  }
+
+  .demo {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    align-self: center;
+  }
+  .demo li {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--sl-color-black) 55%, transparent);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-1);
+  }
+  .n {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-accent-high);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 50%, transparent);
+    font-size: var(--sl-text-xs);
+    font-weight: 650;
+  }
+
+  @media (min-width: 50rem) {
+    .ww-talk {
+      grid-template-columns: 1.1fr 1fr;
+      gap: 2.5rem;
+      padding: 2rem;
+    }
+  }
+</style>

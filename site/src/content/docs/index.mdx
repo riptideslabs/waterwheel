@@ -24,12 +24,21 @@ import { Steps } from '@astrojs/starlight/components';
 import Architecture from '../../components/Architecture.astro';
 import Features from '../../components/Features.astro';
 import Feature from '../../components/Feature.astro';
+import Talk from '../../components/Talk.astro';
 
 ## Why
 
 An API key in a pod can be taken by anyone who gets into the pod. It sits in an environment variable or a Secret, where every process, every `kubectl exec` and every leaked backup can read it.
 
 Anthropic, OpenAI and the cloud providers now offer workload identity federation instead. The workload proves who it is with a signed token and gets a short-lived one back. Every pod already has such a token: Kubernetes signs one for its service account. Waterwheel uses it for every pod, without changing the app.
+
+## Presented at KCD Budapest
+
+We presented the idea at KCD Budapest on 30 October 2026. In the live demo, a pod with no key called Claude: SPIRE gave it an identity, [tokenex](https://github.com/riptideslabs/tokenex) exchanged that for a short-lived Anthropic token, and an egress sidecar added the token on the way out.
+
+Waterwheel turns that demo into a product. The pod's service account token takes SPIRE's place, so there's nothing extra to install, and the first milestone runs the demo's five steps as an automated test.
+
+<Talk />
 
 ## How it works
 
