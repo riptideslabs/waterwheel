@@ -3,7 +3,7 @@ kind: CredentialSource
 metadata: {name: gcp, namespace: api-check}
 spec:
   gcp:
-    oidcProviderId: //iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc
-    serviceAccount: support-bot@example-project.iam.gserviceaccount.com
+    oidcProviderId: //iam.googleapis.com/projects/630209086645/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc
+    serviceAccount: support-bot@support-prod-381204.iam.gserviceaccount.com
     scopes: [https://www.googleapis.com/auth/cloud-platform]
     lifetime: 30m

@@ -3,8 +3,8 @@ apiVersion: core.riptides.io/v1alpha1
 kind: WorkloadIdentity
 metadata: {name: jwt-ttl, namespace: api-check}
 spec:
-  workloadID: ns/api-check/sa/x
+  workloadID: ns/api-check/sa/support-bot
   selectors:
-  - "k8s:pod:serviceaccount": x
+  - "k8s:pod:serviceaccount": support-bot
   svid:
     jwt: {ttl: 2h}

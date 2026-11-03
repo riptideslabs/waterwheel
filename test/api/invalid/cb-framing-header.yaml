@@ -3,7 +3,7 @@ apiVersion: core.riptides.io/v1alpha1
 kind: CredentialBinding
 metadata: {name: framing, namespace: api-check}
 spec:
-  workloadID: ns/api-check/sa/x
+  workloadID: ns/api-check/sa/support-bot
   credentialSource: anthropic
   propagation:
     injection:

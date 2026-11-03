@@ -3,6 +3,6 @@ apiVersion: core.riptides.io/v1alpha1
 kind: WorkloadIdentity
 metadata: {name: unknown-key, namespace: api-check}
 spec:
-  workloadID: ns/api-check/sa/x
+  workloadID: ns/api-check/sa/support-bot
   selectors:
-  - "k8s:pod:sa": x
+  - "k8s:pod:sa": support-bot

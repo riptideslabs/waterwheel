@@ -4,4 +4,4 @@ kind: CredentialSource
 metadata: {name: gcp-provider, namespace: api-check}
 spec:
   gcp:
-    oidcProviderId: projects/123456789012/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc
+    oidcProviderId: projects/630209086645/locations/global/workloadIdentityPools/waterwheel-pool/providers/waterwheel-oidc

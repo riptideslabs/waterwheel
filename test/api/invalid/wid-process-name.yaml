@@ -4,6 +4,6 @@ apiVersion: core.riptides.io/v1alpha1
 kind: WorkloadIdentity
 metadata: {name: process-name, namespace: api-check}
 spec:
-  workloadID: ns/api-check/sa/x
+  workloadID: ns/api-check/sa/support-bot
   selectors:
   - "process:name": curl

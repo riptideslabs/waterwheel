@@ -5,4 +5,4 @@ metadata: {name: reserved, namespace: waterwheel-system}
 spec:
   workloadID: waterwheel/agent/node-1
   selectors:
-  - "k8s:pod:serviceaccount": anything
+  - "k8s:pod:serviceaccount": node-agent

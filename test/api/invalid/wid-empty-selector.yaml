@@ -3,6 +3,6 @@ apiVersion: core.riptides.io/v1alpha1
 kind: WorkloadIdentity
 metadata: {name: empty-selector, namespace: api-check}
 spec:
-  workloadID: ns/api-check/sa/x
+  workloadID: ns/api-check/sa/support-bot
   selectors:
   - {}
