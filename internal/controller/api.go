@@ -14,7 +14,9 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/bindings"
+	"go.riptides.io/waterwheel/internal/identity"
 )
 
 // MaxWatch bounds a watch stream; the proxy then reconnects with a fresh
@@ -32,6 +34,9 @@ type API struct {
 	Reader          client.Reader
 	SystemNamespace string
 	Changes         *Broadcaster
+	// TrustDomain is set with SPIFFE sources: the pod's workload ID comes
+	// from the WorkloadIdentities, rather than its service account.
+	TrustDomain string
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +85,7 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) snapshot(ctx context.Context, c Caller) ([]byte, error) {
-	snap, err := bindings.For(ctx, a.Reader, a.SystemNamespace, c.Namespace, c.Identity())
+	snap, err := a.bindingsOf(ctx, c)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +96,38 @@ func (a *API) snapshot(ctx context.Context, c Caller) ([]byte, error) {
 	}
 
 	return append(b, '\n'), nil
+}
+
+func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, error) {
+	if a.TrustDomain == "" {
+		return bindings.For(ctx, a.Reader, a.SystemNamespace, c.Namespace, c.Identity())
+	}
+
+	var wids v1alpha1.WorkloadIdentityList
+	if err := a.Reader.List(ctx, &wids); err != nil {
+		return bindings.Snapshot{}, err
+	}
+
+	id, reason := resolve(identity.Build(wids.Items, a.SystemNamespace), c)
+	if reason != "" {
+		// No identity, so nothing to exchange; the proxy logs why.
+		return bindings.Snapshot{Bindings: []bindings.Binding{}, Reason: reason}, nil
+	}
+
+	snap, err := bindings.For(ctx, a.Reader, a.SystemNamespace, c.Namespace, id)
+	snap.SPIFFEID = identity.SPIFFEID(a.TrustDomain, id)
+
+	return snap, err
+}
+
+// resolve returns the caller's workload ID, or why it has none.
+func resolve(set *identity.Set, c Caller) (string, string) {
+	id, err := set.Resolve(c.Selectable())
+	if err != nil {
+		return "", err.Error()
+	}
+
+	return id, ""
 }
 
 func (a *API) watch(w http.ResponseWriter, r *http.Request, c Caller) {

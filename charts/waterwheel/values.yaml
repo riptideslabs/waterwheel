@@ -1,7 +1,7 @@
 identity:
   # What the proxy presents to providers:
   #   serviceAccountToken  the pod's projected service account token (default)
-  #   spire                a JWT-SVID from SPIRE (not implemented yet)
+  #   spire                a JWT-SVID from SPIRE, for the pod's WorkloadIdentity
   #   waterwheel           a JWT-SVID from Waterwheel's own agent (not implemented yet)
   source: serviceAccountToken
 
@@ -11,9 +11,11 @@ trustDomain: ""
 
 # spire source only.
 spire:
-  # The spire-controller-manager class that Waterwheel's ClusterSPIFFEIDs carry
-  # (SPIRE chart: spire-server.controllerManager.className).
-  className: waterwheel
+  # The spire-controller-manager class that Waterwheel's ClusterSPIFFEIDs carry.
+  # SPIRE's chart sets it with spire-server.controllerManager.className, and
+  # defaults to <namespace>-<release>: spire-server-spire for the install its
+  # docs show.
+  className: spire-server-spire
   # The SPIFFE CSI driver that mounts the agent's socket into the sidecar.
   csiDriver: csi.spiffe.io
 

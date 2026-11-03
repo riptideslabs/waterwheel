@@ -23,6 +23,10 @@ if [ -e /var/run/secrets ]; then hit "$(find /var/run/secrets -type f)"; else ok
 check "the sidecar's projected tokens (to exchange them myself)"
 if [ -e /run/waterwheel-proxy/tokens ]; then hit "$(ls /run/waterwheel-proxy/tokens)"; else ok "not mounted in this container"; fi
 
+check "a SPIFFE Workload API socket (to ask for SVIDs myself)"
+sockets=$(find / \( -path /proc -o -path /sys \) -prune -o -type s -print 2>/dev/null)
+if [ -n "$sockets" ] || [ -n "${SPIFFE_ENDPOINT_SOCKET:-}" ]; then hit "$sockets ${SPIFFE_ENDPOINT_SOCKET:-}"; else ok "none in this container"; fi
+
 check "the proxy's memory"
 ok "can't see it, only my own processes: $(ps -o comm= | sort -u | tr '\n' ' ')"
 

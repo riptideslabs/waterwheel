@@ -2,14 +2,16 @@
 
 // Command waterwheel-proxy is the per-pod sidecar. It is a CONNECT proxy that
 // terminates TLS only for destinations the pod has a CredentialBinding for,
-// exchanges the pod's projected service account token for the provider's
-// token with tokenex, and adds it to each request. Everything else passes
-// through as a plain tunnel.
+// exchanges the pod's identity (its projected service account token, or with
+// SPIRE a JWT-SVID) for the provider's token with tokenex, and adds it to
+// each request. Everything else passes through as a plain tunnel.
 //
 //	waterwheel-proxy                    run the proxy
 //	waterwheel-proxy healthcheck        exit 0 if the proxy accepts connections
-//	waterwheel-proxy token [audience]   print the claims of the pod's projected token
-//	                                    for an audience (default: the controller's)
+//	waterwheel-proxy token [audience]   print the claims of the pod's subject token
+//	                                    for an audience: its projected token, or with
+//	                                    SPIRE its JWT-SVID (default: the projected
+//	                                    token for the controller)
 package main
 
 import (
@@ -30,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
+	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	_ "golang.org/x/crypto/x509roots/fallback" // the image is FROM scratch
 
 	"go.riptides.io/waterwheel/internal/bindings"
@@ -45,6 +49,8 @@ func main() {
 		tokens     = flag.String("token-dir", "/run/waterwheel-proxy/tokens", "projected service account tokens, one file per audience")
 		bundle     = flag.String("ca-bundle-out", "/run/waterwheel-proxy/bundle/ca-bundle.crt", "where to write the combined CA bundle for the app")
 		caKeyDir   = flag.String("ca-key-dir", "/run/waterwheel-proxy/ca-key", "where the pod CA's key is kept across sidecar restarts")
+		source     = flag.String("identity-source", cmp.Or(os.Getenv("WATERWHEEL_IDENTITY_SOURCE"), "serviceAccountToken"),
+			"the subject token: serviceAccountToken, or spire for JWT-SVIDs from SPIFFE_ENDPOINT_SOCKET")
 	)
 	flag.Parse()
 
@@ -52,11 +58,15 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "":
-		err = run(*listen, *controller, *tokens, *bundle, *caKeyDir)
+		err = run(*listen, *controller, *tokens, *bundle, *caKeyDir, *source == "spire")
 	case "healthcheck":
 		err = healthcheck(*listen)
 	case "token":
-		err = printToken(*tokens, cmp.Or(flag.Arg(1), "waterwheel-controller"))
+		if *source == "spire" && flag.Arg(1) != "" {
+			err = printSVIDs(flag.Arg(1))
+		} else {
+			err = printToken(*tokens, cmp.Or(flag.Arg(1), "waterwheel-controller"))
+		}
 	default:
 		err = fmt.Errorf("unknown command %q", flag.Arg(0))
 	}
@@ -67,7 +77,7 @@ func main() {
 	}
 }
 
-func run(listen, controller, tokens, bundle, caKeyDir string) error {
+func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -97,7 +107,22 @@ func run(listen, controller, tokens, bundle, caKeyDir string) error {
 		return err
 	}
 
-	p := proxy.New(ca, tokens)
+	subjects := proxy.TokenFiles(tokens)
+
+	var workload *workloadapi.Client
+
+	if spire {
+		// Dials lazily, from SPIFFE_ENDPOINT_SOCKET.
+		workload, err = workloadapi.New(ctx)
+		if err != nil {
+			return err
+		}
+		defer workload.Close()
+
+		subjects = proxy.SPIRE(workload)
+	}
+
+	p := proxy.New(ca, subjects)
 
 	client, err := proxy.NewBindingsClient(controller, filepath.Join(tokens, bindings.TokenFile("waterwheel-controller")),
 		[]byte(os.Getenv("WATERWHEEL_CONTROLLER_CA")))
@@ -106,6 +131,9 @@ func run(listen, controller, tokens, bundle, caKeyDir string) error {
 	}
 
 	go client.Watch(ctx, func(snap bindings.Snapshot) { p.Update(ctx, snap) })
+
+	// The startup probe gives the sidecar 30 seconds to listen.
+	start := time.Now()
 
 	// The app starts once the proxy listens. Wait a while for the bindings,
 	// so its first requests already get credentials; until they arrive, every
@@ -116,6 +144,12 @@ func run(listen, controller, tokens, bundle, caKeyDir string) error {
 		slog.Warn("no bindings yet; starting anyway, passing everything through until they arrive")
 	case <-ctx.Done():
 		return nil
+	}
+
+	// SPIRE issues a new pod's SVIDs several seconds after it starts. Wait
+	// for them too, so the app's first requests don't fail.
+	if id := p.SPIFFEID(); workload != nil && id != "" {
+		waitForSVID(ctx, workload, id, 25*time.Second-time.Since(start))
 	}
 
 	slog.Info("listening", "addr", listen, "ca", ca.Cert.Subject.CommonName, "caBundle", bundle)
@@ -132,6 +166,31 @@ func run(listen, controller, tokens, bundle, caKeyDir string) error {
 	}
 
 	return nil
+}
+
+// waitForSVID waits until the Workload API has issued the pod's SPIFFE ID, or
+// for at most limit.
+func waitForSVID(ctx context.Context, workload *workloadapi.Client, id string, limit time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+
+	for {
+		if x509, err := workload.FetchX509Context(ctx); err == nil {
+			for _, s := range x509.SVIDs {
+				if s.ID.String() == id {
+					return
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			slog.Warn("SPIRE hasn't issued the pod's SVID yet; starting anyway", "spiffeID", id)
+
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 func healthcheck(listen string) error {
@@ -153,7 +212,31 @@ func printToken(dir, audience string) error {
 		return err
 	}
 
-	parts := strings.Split(strings.TrimSpace(string(raw)), ".")
+	return printJWT(strings.TrimSpace(string(raw)))
+}
+
+// printSVIDs prints the header and claims of each JWT-SVID the pod gets for
+// an audience, from SPIFFE_ENDPOINT_SOCKET; usually one.
+func printSVIDs(audience string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	svids, err := workloadapi.FetchJWTSVIDs(ctx, jwtsvid.Params{Audience: audience})
+	if err != nil {
+		return err
+	}
+
+	for _, s := range svids {
+		if err := printJWT(s.Marshal()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func printJWT(raw string) error {
+	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		return errNotJWT
 	}

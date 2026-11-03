@@ -150,6 +150,7 @@ spec:
         {{- end }}
         {{- if eq $source "spire" }}
         - --spire-class-name={{ .Values.spire.className }}
+        - --spiffe-csi-driver={{ .Values.spire.csiDriver }}
         {{- end }}
         {{- if eq $source "waterwheel" }}
         - --issuer={{ required "set issuer" .Values.issuer }}

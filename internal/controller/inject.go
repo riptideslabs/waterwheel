@@ -48,9 +48,13 @@ const (
 	BundleFile = "ca-bundle.crt"
 	CAKeyDir   = "/run/waterwheel-proxy/ca-key"
 
-	tokenVolume  = "waterwheel-proxy-tokens"
-	bundleVolume = "waterwheel-proxy-bundle"
-	caKeyVolume  = "waterwheel-proxy-ca-key"
+	// WorkloadAPIDir holds the SPIRE agent's socket, with the spire source.
+	WorkloadAPIDir = "/run/waterwheel-proxy/workload-api"
+
+	tokenVolume       = "waterwheel-proxy-tokens"
+	bundleVolume      = "waterwheel-proxy-bundle"
+	caKeyVolume       = "waterwheel-proxy-ca-key"
+	workloadAPIVolume = "waterwheel-proxy-workload-api"
 )
 
 // osBundlePaths are where Linux distributions keep their CA bundle.
@@ -75,7 +79,9 @@ var bundleEnv = []string{
 // Injector adds waterwheel-proxy to pods in namespaces that turned injection on
 // (the webhook's namespaceSelector does the matching). The sidecar gets one
 // projected service account token per audience the pod's bindings need, plus
-// one for the bindings API; the app containers get none.
+// one for the bindings API; the app containers get none. With the spire
+// source, the sidecar gets SPIRE's Workload API instead, and only the token
+// for the bindings API.
 type Injector struct {
 	Decoder         admission.Decoder
 	Reader          client.Reader
@@ -93,6 +99,9 @@ type Injector struct {
 	// namespace; an uncached reader, so the controller doesn't cache every
 	// ConfigMap.
 	ConfigMaps client.Reader
+	// CSIDriver is set with the spire source: the SPIFFE CSI driver that
+	// mounts the SPIRE agent's socket.
+	CSIDriver string
 }
 
 // ExtraRootsConfigMap holds CAs (key ca.crt) that both the proxy, upstream,
@@ -123,7 +132,7 @@ func (i *Injector) Handle(ctx context.Context, req admission.Request) admission.
 	}
 
 	slog.Info("injected "+SidecarName, "namespace", req.Namespace, "pod", cmp.Or(pod.Name, pod.GenerateName+"…"),
-		"audiences", pod.Annotations[AnnotationAudiences])
+		"audiences", cmp.Or(pod.Annotations[AnnotationAudiences], "-"))
 
 	return admission.PatchResponseFromRaw(req.Object.Raw, raw)
 }
@@ -131,14 +140,19 @@ func (i *Injector) Handle(ctx context.Context, req admission.Request) admission.
 // Mutate adds the sidecar, its volumes, and the proxy and CA settings of the
 // app containers to a pod in namespace.
 func (i *Injector) Mutate(ctx context.Context, namespace string, pod *corev1.Pod) error {
-	sa := cmp.Or(pod.Spec.ServiceAccountName, "default")
+	// With SPIRE, the sidecar asks for SVIDs at runtime, for any audience.
+	var auds []string
 
-	snap, err := bindings.For(ctx, i.Reader, i.SystemNamespace, namespace, bindings.ServiceAccountID(namespace, sa))
-	if err != nil {
-		return err
+	if i.CSIDriver == "" {
+		sa := cmp.Or(pod.Spec.ServiceAccountName, "default")
+
+		snap, err := bindings.For(ctx, i.Reader, i.SystemNamespace, namespace, bindings.ServiceAccountID(namespace, sa))
+		if err != nil {
+			return err
+		}
+
+		auds = snap.Audiences()
 	}
-
-	auds := snap.Audiences()
 
 	extra, err := i.extraRoots(ctx)
 	if err != nil {
@@ -191,7 +205,10 @@ func (i *Injector) Mutate(ctx context.Context, namespace string, pod *corev1.Pod
 	}
 
 	pod.Annotations[AnnotationInjected] = strTrue
-	pod.Annotations[AnnotationAudiences] = strings.Join(auds, ",")
+
+	if i.CSIDriver == "" {
+		pod.Annotations[AnnotationAudiences] = strings.Join(auds, ",")
+	}
 
 	return nil
 }
@@ -225,6 +242,19 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 		env = append(env, corev1.EnvVar{Name: "WATERWHEEL_EXTRA_ROOTS", Value: extraRoots})
 	}
 
+	mounts := []corev1.VolumeMount{
+		{Name: tokenVolume, MountPath: TokenDir, ReadOnly: true},
+		{Name: bundleVolume, MountPath: BundleDir},
+		{Name: caKeyVolume, MountPath: CAKeyDir},
+	}
+
+	if i.CSIDriver != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "WATERWHEEL_IDENTITY_SOURCE", Value: "spire"},
+			corev1.EnvVar{Name: "SPIFFE_ENDPOINT_SOCKET", Value: "unix://" + WorkloadAPIDir + "/spire-agent.sock"})
+		mounts = append(mounts, corev1.VolumeMount{Name: workloadAPIVolume, MountPath: WorkloadAPIDir, ReadOnly: true})
+	}
+
 	// A native sidecar: it starts, and passes its startup probe (CA bundle
 	// written, listening), before the app containers start.
 	return corev1.Container{
@@ -253,11 +283,7 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 			AllowPrivilegeEscalation: new(false),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: tokenVolume, MountPath: TokenDir, ReadOnly: true},
-			{Name: bundleVolume, MountPath: BundleDir},
-			{Name: caKeyVolume, MountPath: CAKeyDir},
-		},
+		VolumeMounts: mounts,
 	}
 }
 
@@ -275,7 +301,7 @@ func (i *Injector) volumes(auds []string) []corev1.Volume {
 		}}
 	}
 
-	return []corev1.Volume{
+	vols := []corev1.Volume{
 		// Mounted only into the sidecar: the app never sees a token.
 		{Name: tokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: tokens}}},
 		// The combined CA bundle the sidecar writes for the app.
@@ -283,6 +309,15 @@ func (i *Injector) volumes(auds []string) []corev1.Volume {
 		// The pod CA's key, so a sidecar restart keeps the CA the app trusts.
 		{Name: caKeyVolume, VolumeSource: memory("1Mi")},
 	}
+
+	if i.CSIDriver != "" {
+		// SPIRE's Workload API, mounted only into the sidecar too.
+		vols = append(vols, corev1.Volume{Name: workloadAPIVolume, VolumeSource: corev1.VolumeSource{
+			CSI: &corev1.CSIVolumeSource{Driver: i.CSIDriver, ReadOnly: new(true)},
+		}})
+	}
+
+	return vols
 }
 
 func hasContainer(pod *corev1.Pod, name string) bool {

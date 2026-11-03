@@ -1,16 +1,53 @@
 ---
-// The example workload with service account tokens: support-bot calls Claude
-// with no key. Kubernetes signs the pod's projected token, waterwheel-proxy gets its
-// bindings from the controller, swaps the token for an Anthropic token and adds
-// that to the request. Steps match index.mdx.
+// The example workload: support-bot calls Claude with no key. With service
+// account tokens, Kubernetes signs the pod's projected tokens; with spire,
+// SPIRE issues it JWT-SVIDs. Either way waterwheel-proxy gets its bindings from
+// the controller, swaps the identity for an Anthropic token and adds that to
+// the request. Steps match index.mdx.
+interface Props {
+  spire?: boolean;
+}
+
+const { spire = false } = Astro.props;
+
+// Marker ids are per variant: both diagrams are on the page, one in a hidden tab.
+const id = spire ? "sp" : "ar";
+
+const t = spire
+  ? {
+      aria: "Request path of the support-bot pod with SPIRE. 1: waterwheel-controller registers the pod's WorkloadIdentity with SPIRE as ClusterSPIFFEIDs. 2: the SPIRE agent on the node attests the waterwheel-proxy sidecar and issues it JWT-SVIDs, through a Workload API socket only the sidecar mounts. 3: the proxy asks the controller for its bindings and its SPIFFE ID. 4: the app sends its request, with no key, to the proxy. 5: the proxy exchanges a JWT-SVID at Anthropic's token endpoint, which checks it against SPIRE's published keys. 6: the proxy adds the token and sends the request to api.anthropic.com.",
+      signer: ["spire-server", "+ controller manager"],
+      issuer: "entries, SVIDs",
+      node: ["spire-agent", "attests the sidecar"],
+      identity: ["Workload API", "CSI · sidecar only"],
+      delivery: "SVIDs, any audience",
+      keys: ["SPIRE's JWKS", "OIDC discovery or upload"],
+      publishes: "publishes SPIRE's keys",
+    }
+  : {
+      aria: "Request path of the support-bot pod. 1: the kubelet writes the pod's service account tokens, signed by the API server, into a volume only the waterwheel-proxy sidecar mounts. 2: the proxy asks waterwheel-controller for its bindings, and the controller checks its token with a TokenReview. 3: the app sends its request, with no key, to the proxy. 4: the proxy exchanges the service account token at Anthropic's token endpoint. 5: Anthropic checks it against the cluster's published keys. 6: the proxy adds the token and sends the request to api.anthropic.com.",
+      signer: ["kube-apiserver", "signs SA tokens"],
+      issuer: "issues tokens",
+      node: ["kubelet", "writes, rotates"],
+      identity: ["SA tokens", "sidecar only"],
+      delivery: "one per audience",
+      keys: ["Cluster's JWKS", "issuer URL or upload"],
+      publishes: "publishes the issuer's keys",
+    };
+
+// Step numbers: SPIRE registers first, so its delivery and bindings steps
+// come one later, and the exchange and the check are one step.
+const n = spire
+  ? { register: 1, delivery: 2, bindings: 3, connect: 4, exchange: 5 }
+  : { delivery: 1, bindings: 2, connect: 3, exchange: 4, check: 5 };
 ---
 <figure class="diagram">
   <div class="scroll">
-    <svg viewBox="0 0 1080 570" role="img" aria-label="Request path of the support-bot pod. 1: the kubelet writes the pod's service account tokens, signed by the API server, into a volume only the waterwheel-proxy sidecar mounts. 2: the proxy asks waterwheel-controller for its bindings, and the controller checks its token with a TokenReview. 3: the app sends its request, with no key, to the proxy. 4: the proxy exchanges the service account token at Anthropic's token endpoint. 5: Anthropic checks it against the cluster's published keys. 6: the proxy adds the token and sends the request to api.anthropic.com.">
+    <svg viewBox="0 0 1080 570" role="img" aria-label={t.aria}>
       <defs>
-        <marker id="ar-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head"></path></marker>
-        <marker id="ar-arr-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head-dash"></path></marker>
-        <marker id="ar-arr-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head-acc"></path></marker>
+        <marker id={`${id}-arr`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head"></path></marker>
+        <marker id={`${id}-arr-dash`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head-dash"></path></marker>
+        <marker id={`${id}-arr-acc`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="d-head-acc"></path></marker>
       </defs>
 
       <!-- Zones -->
@@ -25,8 +62,8 @@
 
       <!-- Boxes -->
       <rect x="24" y="56" width="200" height="64" rx="10" class="d-box"></rect>
-      <text x="124" y="83" class="d-title" text-anchor="middle">kube-apiserver</text>
-      <text x="124" y="103" class="d-sub" text-anchor="middle">signs SA tokens</text>
+      <text x="124" y="83" class="d-title" text-anchor="middle">{t.signer[0]}</text>
+      <text x="124" y="103" class="d-sub" text-anchor="middle">{t.signer[1]}</text>
 
       <rect x="558" y="56" width="190" height="64" rx="10" class="d-box-waterwheel"></rect>
       <text x="653" y="83" class="d-title" text-anchor="middle">waterwheel-controller</text>
@@ -41,16 +78,16 @@
       <text x="653" y="287" class="d-sub" text-anchor="middle">sidecar · :3128</text>
 
       <rect x="568" y="372" width="170" height="64" rx="10" class="d-note"></rect>
-      <text x="653" y="399" class="d-title" text-anchor="middle">SA tokens</text>
-      <text x="653" y="419" class="d-sub" text-anchor="middle">sidecar only</text>
+      <text x="653" y="399" class="d-title" text-anchor="middle">{t.identity[0]}</text>
+      <text x="653" y="419" class="d-sub" text-anchor="middle">{t.identity[1]}</text>
 
       <rect x="280" y="470" width="170" height="56" rx="10" class="d-box"></rect>
-      <text x="365" y="493" class="d-title" text-anchor="middle">kubelet</text>
-      <text x="365" y="512" class="d-sub" text-anchor="middle">writes, rotates</text>
+      <text x="365" y="493" class="d-title" text-anchor="middle">{t.node[0]}</text>
+      <text x="365" y="512" class="d-sub" text-anchor="middle">{t.node[1]}</text>
 
       <rect x="844" y="56" width="210" height="64" rx="10" class="d-box"></rect>
-      <text x="949" y="83" class="d-title" text-anchor="middle">Cluster's JWKS</text>
-      <text x="949" y="103" class="d-sub" text-anchor="middle">issuer URL or upload</text>
+      <text x="949" y="83" class="d-title" text-anchor="middle">{t.keys[0]}</text>
+      <text x="949" y="103" class="d-sub" text-anchor="middle">{t.keys[1]}</text>
 
       <rect x="844" y="140" width="210" height="64" rx="10" class="d-box"></rect>
       <text x="949" y="167" class="d-title" text-anchor="middle">Token endpoint</text>
@@ -61,49 +98,63 @@
       <text x="949" y="287" class="d-sub" text-anchor="middle">Messages API</text>
 
       <!-- The issuer's keys reach the provider -->
-      <path d="M200 56 V38 H949 V54" class="d-edge-dash" marker-end="url(#ar-arr-dash)"></path>
-      <text x="300" y="52" class="d-mono">publishes the issuer's keys</text>
+      <path d="M200 56 V38 H949 V54" class="d-edge-dash" marker-end={`url(#${id}-arr-dash)`}></path>
+      <text x="300" y="52" class="d-mono">{t.publishes}</text>
 
-      <!-- API server → kubelet -->
-      <path d="M124 120 V498 H278" class="d-edge" marker-end="url(#ar-arr)"></path>
-      <text x="134" y="310" class="d-mono">issues tokens</text>
+      <!-- The signer → the node's issuer -->
+      <path d="M124 120 V498 H278" class="d-edge" marker-end={`url(#${id}-arr)`}></path>
+      <text x="134" y="310" class="d-mono">{t.issuer}</text>
 
-      <!-- 1: kubelet → token volume -->
-      <path d="M450 498 H653 V438" class="d-edge" marker-end="url(#ar-arr)"></path>
+      <!-- The identity reaches the sidecar, and only the sidecar -->
+      <path d="M450 498 H653 V438" class="d-edge" marker-end={`url(#${id}-arr)`}></path>
       <circle cx="478" cy="484" r="8" class="d-badge"></circle>
-      <text x="478" y="488" class="d-badge-num" text-anchor="middle">1</text>
-      <text x="490" y="488" class="d-label">one per audience</text>
-      <line x1="653" y1="372" x2="653" y2="306" class="d-edge" marker-end="url(#ar-arr)"></line>
+      <text x="478" y="488" class="d-badge-num" text-anchor="middle">{n.delivery}</text>
+      <text x="490" y="488" class="d-label">{t.delivery}</text>
+      <line x1="653" y1="372" x2="653" y2="306" class="d-edge" marker-end={`url(#${id}-arr)`}></line>
 
-      <!-- 2: proxy → controller, controller → API server -->
-      <line x1="653" y1="240" x2="653" y2="122" class="d-edge" marker-end="url(#ar-arr)"></line>
+      <!-- Proxy → controller -->
+      <line x1="653" y1="240" x2="653" y2="122" class="d-edge" marker-end={`url(#${id}-arr)`}></line>
       <circle cx="530" cy="138" r="8" class="d-badge"></circle>
-      <text x="530" y="142" class="d-badge-num" text-anchor="middle">2</text>
-      <text x="641" y="142" class="d-label" text-anchor="end">my bindings?</text>
-      <line x1="556" y1="88" x2="226" y2="88" class="d-edge" marker-end="url(#ar-arr)"></line>
-      <text x="396" y="80" class="d-mono" text-anchor="middle">TokenReview</text>
+      <text x="530" y="142" class="d-badge-num" text-anchor="middle">{n.bindings}</text>
+      <text x="641" y="142" class="d-label" text-anchor="end">{spire ? "bindings, my ID?" : "my bindings?"}</text>
 
-      <!-- 3: app → proxy -->
-      <line x1="450" y1="272" x2="566" y2="272" class="d-edge" marker-end="url(#ar-arr)"></line>
+      <!-- Controller → the signer: TokenReview, or with SPIRE, registration -->
+      <line x1="556" y1="88" x2="226" y2="88" class="d-edge" marker-end={`url(#${id}-arr)`}></line>
+      {spire ? (
+        <>
+          <circle cx="282" cy="76" r="8" class="d-badge"></circle>
+          <text x="282" y="80" class="d-badge-num" text-anchor="middle">{n.register}</text>
+          <text x="296" y="80" class="d-label">ClusterSPIFFEIDs</text>
+        </>
+      ) : (
+        <text x="396" y="80" class="d-mono" text-anchor="middle">TokenReview</text>
+      )}
+
+      <!-- App → proxy -->
+      <line x1="450" y1="272" x2="566" y2="272" class="d-edge" marker-end={`url(#${id}-arr)`}></line>
       <circle cx="470" cy="256" r="8" class="d-badge"></circle>
-      <text x="470" y="260" class="d-badge-num" text-anchor="middle">3</text>
+      <text x="470" y="260" class="d-badge-num" text-anchor="middle">{n.connect}</text>
       <text x="482" y="260" class="d-label">CONNECT</text>
       <text x="508" y="290" class="d-mono" text-anchor="middle">no key</text>
 
-      <!-- 4: proxy → token endpoint -->
-      <path d="M720 240 V172 H842" class="d-edge" marker-end="url(#ar-arr)"></path>
+      <!-- Proxy → token endpoint -->
+      <path d="M720 240 V172 H842" class="d-edge" marker-end={`url(#${id}-arr)`}></path>
       <circle cx="740" cy="160" r="8" class="d-badge"></circle>
-      <text x="740" y="164" class="d-badge-num" text-anchor="middle">4</text>
+      <text x="740" y="164" class="d-badge-num" text-anchor="middle">{n.exchange}</text>
       <text x="752" y="164" class="d-label d-halo">exchange</text>
 
-      <!-- 5: token endpoint checks the keys -->
-      <line x1="949" y1="140" x2="949" y2="122" class="d-edge-dash" marker-end="url(#ar-arr-dash)"></line>
-      <circle cx="972" cy="130" r="8" class="d-badge"></circle>
-      <text x="972" y="134" class="d-badge-num" text-anchor="middle">5</text>
-      <text x="984" y="134" class="d-label">checks</text>
+      <!-- The token endpoint checks the keys -->
+      <line x1="949" y1="140" x2="949" y2="122" class="d-edge-dash" marker-end={`url(#${id}-arr-dash)`}></line>
+      {n.check && (
+        <>
+          <circle cx="972" cy="130" r="8" class="d-badge"></circle>
+          <text x="972" y="134" class="d-badge-num" text-anchor="middle">{n.check}</text>
+        </>
+      )}
+      <text x={n.check ? 984 : 960} y="134" class="d-label">checks</text>
 
-      <!-- 6: proxy → API, with the token -->
-      <line x1="738" y1="272" x2="842" y2="272" class="d-edge-acc d-flow" marker-end="url(#ar-arr-acc)"></line>
+      <!-- Proxy → API, with the token -->
+      <line x1="738" y1="272" x2="842" y2="272" class="d-edge-acc d-flow" marker-end={`url(#${id}-arr-acc)`}></line>
       <circle cx="762" cy="258" r="8" class="d-badge"></circle>
       <text x="762" y="262" class="d-badge-num" text-anchor="middle">6</text>
       <text x="774" y="262" class="d-label-acc d-halo">+ token</text>

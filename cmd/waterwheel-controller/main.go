@@ -3,7 +3,8 @@
 // Command waterwheel-controller is Waterwheel's control plane. It injects waterwheel-proxy
 // into pods with the projected tokens they need, serves each proxy its
 // CredentialBindings, authenticated by TokenReview, and keeps the bindings'
-// status. See docs/design.md.
+// status. With the spire source, it also registers WorkloadIdentities with
+// SPIRE. See docs/design.md.
 package main
 
 import (
@@ -41,6 +42,7 @@ type config struct {
 	source         string
 	trustDomain    string
 	spireClassName string
+	csiDriver      string
 	issuer         string
 	namespace      string
 	serviceName    string
@@ -58,7 +60,8 @@ func main() {
 
 	flag.StringVar(&cfg.source, "identity-source", "serviceAccountToken", "what proxies present to providers: serviceAccountToken, spire or waterwheel")
 	flag.StringVar(&cfg.trustDomain, "trust-domain", "", "spire and waterwheel sources: SPIFFE trust domain, e.g. example.org")
-	flag.StringVar(&cfg.spireClassName, "spire-class-name", "waterwheel", "spire source: className of the ClusterSPIFFEIDs Waterwheel writes")
+	flag.StringVar(&cfg.spireClassName, "spire-class-name", "spire-server-spire", "spire source: className of the ClusterSPIFFEIDs Waterwheel writes")
+	flag.StringVar(&cfg.csiDriver, "spiffe-csi-driver", "csi.spiffe.io", "spire source: the CSI driver that mounts the SPIRE agent's socket")
 	flag.StringVar(&cfg.issuer, "issuer", "", "waterwheel source: iss claim of JWT-SVIDs; the OIDC discovery URL")
 	flag.StringVar(&cfg.namespace, "namespace", cmp.Or(os.Getenv("POD_NAMESPACE"), "waterwheel-system"), "Waterwheel's own namespace; its bindings apply to any namespace")
 	flag.StringVar(&cfg.serviceName, "service-name", "waterwheel-controller", "the controller's Service, for its serving certificate")
@@ -78,11 +81,14 @@ func main() {
 }
 
 func run(cfg config) error {
-	switch cfg.source {
-	case "serviceAccountToken":
-	case "spire", "waterwheel":
-		return fmt.Errorf("the %s identity source is not implemented yet", cfg.source)
-	default:
+	spire := cfg.source == "spire"
+
+	switch {
+	case cfg.source == "waterwheel":
+		return errors.New("the waterwheel identity source is not implemented yet")
+	case spire && cfg.trustDomain == "":
+		return errors.New("the spire identity source needs --trust-domain")
+	case !spire && cfg.source != "serviceAccountToken":
 		return fmt.Errorf("unknown --identity-source %q", cfg.source)
 	}
 
@@ -108,6 +114,9 @@ func run(cfg config) error {
 		LeaderElection:          true,
 		LeaderElectionID:        "waterwheel-controller",
 		LeaderElectionNamespace: cfg.namespace,
+		// The process exits when the manager stops, so hand the lease over
+		// right away; a rollout then doesn't wait for it to expire.
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		return err
@@ -148,6 +157,10 @@ func run(cfg config) error {
 		ConfigMaps:      mgr.GetAPIReader(),
 	}
 
+	if spire {
+		injector.CSIDriver = cfg.csiDriver
+	}
+
 	webhookMux := http.NewServeMux()
 	webhookMux.Handle("/inject", &admission.Webhook{Handler: injector})
 
@@ -166,6 +179,10 @@ func run(cfg config) error {
 		Changes:         changes,
 	}
 
+	if spire {
+		api.TrustDomain = cfg.trustDomain
+	}
+
 	server := &controller.TLSServer{Server: &http.Server{
 		Addr:              cfg.apiAddr,
 		Handler:           api,
@@ -177,7 +194,8 @@ func run(cfg config) error {
 		Client:                mgr.GetClient(),
 		Pods:                  mgr.GetAPIReader(),
 		SystemNamespace:       cfg.namespace,
-		ServiceAccountIDsOnly: cfg.source == "serviceAccountToken",
+		ServiceAccountIDsOnly: !spire,
+		WorkloadIdentities:    spire,
 	}
 
 	if err := errors.Join(
@@ -191,12 +209,28 @@ func run(cfg config) error {
 		return err
 	}
 
+	if spire {
+		registrar := &controller.IdentityRegistrar{
+			Client:          mgr.GetClient(),
+			Reader:          mgr.GetAPIReader(),
+			Changes:         changes,
+			SystemNamespace: cfg.namespace,
+			TrustDomain:     cfg.trustDomain,
+			ClassName:       cfg.spireClassName,
+		}
+
+		if err := mgr.Add(registrar); err != nil {
+			return err
+		}
+	}
+
 	slog.Info("starting", "identitySource", cfg.source, "namespace", cfg.namespace, "api", cfg.apiAddr, "webhook", cfg.webhookAddr)
 
 	return mgr.Start(ctx)
 }
 
-// notifyOnChange wakes bindings watchers whenever a binding or source changes.
+// notifyOnChange wakes bindings watchers, and the registrar, whenever a
+// binding, source or identity changes.
 func notifyOnChange(ctx context.Context, c cache.Cache, b *controller.Broadcaster) error {
 	notify := toolscache.ResourceEventHandlerFuncs{
 		AddFunc:    func(any) { b.Notify() },
@@ -204,7 +238,7 @@ func notifyOnChange(ctx context.Context, c cache.Cache, b *controller.Broadcaste
 		DeleteFunc: func(any) { b.Notify() },
 	}
 
-	for _, obj := range []client.Object{&v1alpha1.CredentialBinding{}, &v1alpha1.CredentialSource{}} {
+	for _, obj := range []client.Object{&v1alpha1.CredentialBinding{}, &v1alpha1.CredentialSource{}, &v1alpha1.WorkloadIdentity{}} {
 		inf, err := c.GetInformer(ctx, obj, cache.BlockUntilSynced(false))
 		if err != nil {
 			return err

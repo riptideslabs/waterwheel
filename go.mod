@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/go-logr/logr v1.4.3
+	github.com/spiffe/go-spiffe/v2 v2.9.0
 	go.riptides.io/tokenex v0.7.0
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
 	k8s.io/api v0.37.1
@@ -23,6 +24,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.10.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.1 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.36.5 // indirect
 	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

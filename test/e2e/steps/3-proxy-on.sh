@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Step 3: turn Waterwheel on for the namespace. The webhook adds waterwheel-proxy to
-# pods created from then on, with the pod's projected service account tokens.
+# pods created from then on, with the pod's projected service account tokens,
+# or with SPIRE, the Workload API.
 source "$(dirname "$0")/../lib.sh"
 cd "$ROOT" || exit
 

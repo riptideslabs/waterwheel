@@ -5,7 +5,9 @@
 //
 //	sts.fake.waterwheel.test  an RFC 8693 token endpoint that accepts the cluster's
 //	                          service account tokens, checked against the API
-//	                          server's keys, and issues opaque access tokens
+//	                          server's keys, or with JWKS_URL set, SPIRE's
+//	                          JWT-SVIDs, checked against the keys there; it
+//	                          issues opaque access tokens
 //	api.fake.waterwheel.test  an Anthropic-shaped API that answers 401 without one
 //	                          of those tokens, and a greeting with one
 package main
@@ -46,6 +48,10 @@ type server struct {
 	http     *http.Client
 	audience string
 	allowed  []string
+	// jwksURL and issuer are set to check JWT-SVIDs rather than service
+	// account tokens: SPIRE's OIDC discovery provider serves its keys.
+	jwksURL string
+	issuer  string
 
 	mu     sync.Mutex
 	issued map[string]grant
@@ -79,6 +85,8 @@ func run() error {
 		http:     hc,
 		audience: cmp.Or(os.Getenv("AUDIENCE"), "https://sts.fake.waterwheel.test/token"),
 		allowed:  strings.Split(os.Getenv("ALLOWED_SUBJECTS"), ","),
+		jwksURL:  os.Getenv("JWKS_URL"),
+		issuer:   os.Getenv("ISSUER"),
 		issued:   map[string]grant{},
 	}
 
@@ -88,7 +96,7 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	slog.Info("listening", "addr", srv.Addr, "audience", s.audience, "allowed", s.allowed)
+	slog.Info("listening", "addr", srv.Addr, "audience", s.audience, "allowed", s.allowed, "jwks", s.jwksURL)
 
 	return srv.ListenAndServeTLS("/tls/tls.crt", "/tls/tls.key")
 }
@@ -172,27 +180,16 @@ func exchangeRequest(r *http.Request) (map[string]string, error) {
 	return req, nil
 }
 
-// verify checks a service account token against the API server's keys, and
-// returns its subject.
+// verify checks a subject token against its issuer's keys, and returns its
+// subject.
 func (s *server) verify(raw string) (string, error) {
-	tok, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256, jose.ES256})
+	tok, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.RS256, jose.ES256, jose.ES384})
 	if err != nil {
 		return "", err
 	}
 
-	var discovery struct {
-		Issuer string `json:"issuer"`
-	}
-	if err := s.get("/.well-known/openid-configuration", &discovery); err != nil {
-		return "", err
-	}
-
-	if discovery.Issuer == "" {
-		return "", errBadIssuer
-	}
-
-	var keys jose.JSONWebKeySet
-	if err := s.get("/openid/v1/jwks", &keys); err != nil {
+	issuer, keys, err := s.keys()
+	if err != nil {
 		return "", err
 	}
 
@@ -201,7 +198,7 @@ func (s *server) verify(raw string) (string, error) {
 		return "", err
 	}
 
-	expected := jwt.Expected{Issuer: discovery.Issuer, AnyAudience: jwt.Audience{s.audience}, Time: time.Now()}
+	expected := jwt.Expected{Issuer: issuer, AnyAudience: jwt.Audience{s.audience}, Time: time.Now()}
 	if err := claims.ValidateWithLeeway(expected, time.Minute); err != nil {
 		return "", err
 	}
@@ -213,15 +210,46 @@ func (s *server) verify(raw string) (string, error) {
 	return claims.Subject, nil
 }
 
+// keys returns the issuer and the keys of the tokens it accepts: SPIRE's from
+// JWKS_URL, or the API server's.
+func (s *server) keys() (string, jose.JSONWebKeySet, error) {
+	var keys jose.JSONWebKeySet
+
+	if s.jwksURL != "" {
+		err := getJSON(http.DefaultClient, s.jwksURL, &keys)
+
+		return s.issuer, keys, err
+	}
+
+	var discovery struct {
+		Issuer string `json:"issuer"`
+	}
+	if err := s.get("/.well-known/openid-configuration", &discovery); err != nil {
+		return "", keys, err
+	}
+
+	if discovery.Issuer == "" {
+		return "", keys, errBadIssuer
+	}
+
+	err := s.get("/openid/v1/jwks", &keys)
+
+	return discovery.Issuer, keys, err
+}
+
 func (s *server) get(path string, v any) error {
-	resp, err := s.http.Get(strings.TrimSuffix(s.api.Host, "/") + path) //nolint:noctx // a test server
+	return getJSON(s.http, strings.TrimSuffix(s.api.Host, "/")+path, v)
+}
+
+func getJSON(c *http.Client, url string, v any) error {
+	resp, err := c.Get(url) //nolint:noctx // a test server
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", path, resp.Status) //nolint:err113 // a test server's message
+		return fmt.Errorf("GET %s: %s", url, resp.Status) //nolint:err113 // a test server's message
 	}
 
 	return json.NewDecoder(resp.Body).Decode(v)

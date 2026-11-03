@@ -1,8 +1,8 @@
 # Waterwheel design
 
 Status: draft. Reviewed 2026-10-30. On 2026-11-02, Kubernetes service account
-tokens became the first identity source, with SPIFFE identities as options
-later. The decisions are recorded at the end of this document.
+tokens became the first identity source, and on 2026-11-03 SPIRE the second.
+The decisions are recorded at the end of this document.
 
 Waterwheel turns a pod's identity into the API credentials it needs, so no pod
 holds a long-lived key. It is the KCD Budapest demo
@@ -11,8 +11,8 @@ holds a long-lived key. It is the KCD Budapest demo
 For plain credential injection, the pod's Kubernetes service account is
 identity enough. Kubernetes signs a short-lived token for it, and the provider
 trusts the cluster's issuer. This is how AWS IRSA and GKE and AKS workload
-identity work. SPIFFE identities from SPIRE, and later from Waterwheel's own agent,
-are options for finer-grained identities.
+identity work. SPIFFE identities from SPIRE, and later from Waterwheel's own
+agent, are options for finer-grained identities.
 
 ## Components
 
@@ -43,7 +43,7 @@ All of this is in one Go module, `go.riptides.io/waterwheel`, under Apache-2.0.
 | Source | Subject token | The provider sees | Needs |
 |---|---|---|---|
 | `serviceAccountToken` (default, M1) | projected service account token | `system:serviceaccount:<ns>:<sa>` | the cluster's issuer published (see [oidc.md](oidc.md)) |
-| `spire` (later) | JWT-SVID | `spiffe://<td>/<workloadID>` | SPIRE |
+| `spire` | JWT-SVID | `spiffe://<td>/<workloadID>` | SPIRE, with its controller manager and CSI driver |
 | `waterwheel` (later) | JWT-SVID from Waterwheel's agent | `spiffe://<td>/<workloadID>` | Waterwheel's agent and signer |
 
 The chart's `identity.source` picks one. Everything else (the bindings API,
@@ -66,6 +66,10 @@ names the pods that need a restart. The alternative is to
 request tokens at runtime, which needs permission to create service account
 tokens, and that is too powerful to give the controller.
 
+With SPIRE, none of this applies. The sidecar gets the Workload API, plus the
+one `waterwheel-controller` token, and asks for a JWT-SVID per audience at
+runtime.
+
 **Bindings.**
 
 - The proxy calls the controller's bindings API over TLS. It trusts the
@@ -74,7 +78,9 @@ tokens, and that is too powerful to give the controller.
   controller the service account, the pod's name and UID.
 - The controller checks that the pod exists and runs as that service account,
   then returns the bindings for `ns/<ns>/sa/<sa>`: destinations, the provider
-  config, the subject token's audience and the injection header.
+  config, the subject token's audience and the injection header. With SPIRE,
+  it first works out the pod's WorkloadIdentity (see [SPIRE](#spire)), and
+  returns the bindings of its workload ID, with the SPIFFE ID to ask SPIRE for.
 - It is `GET /v1/bindings` over HTTPS. With `?watch=true` it streams one JSON
   snapshot per line, and a new one whenever a binding or source changes, like
   a Kubernetes watch. A stream ends after 10 minutes, and the proxy reconnects
@@ -87,8 +93,10 @@ never needs a SPIFFE identity of its own.
 `creds.go`). The subject token is the projected token for the source's
 audience, read from its file on every exchange, since the kubelet rotates it.
 tokenex has no file-based identity token provider yet. A small one lives in
-Waterwheel first, and moves to tokenex later. Exchanged tokens stay in the proxy's
-memory.
+Waterwheel first, and moves to tokenex later. With SPIRE, the subject token is
+a JWT-SVID for that audience and the pod's SPIFFE ID, fetched from the
+Workload API on every exchange with tokenex's `spiffe` provider. Exchanged
+tokens stay in the proxy's memory.
 
 **Proxy.** For each `CONNECT host:port`:
 
@@ -142,8 +150,10 @@ field names wherever the two overlap, so they can be merged later.
 - **WorkloadIdentity** is only used with SPIFFE sources. It has `workloadID`,
   `selectors` and `svid`, and no `scope`.
   - Selector entries are ORed, and the keys inside an entry are ANDed.
-  - The keys are the ones SPIRE can provide (see below). `process:name` and
-    `process:binary:path` return with Waterwheel's own agent.
+  - With SPIRE, only the pod keys apply: `k8s:pod:*` and `k8s:label:*`. The
+    sidecar fetches the SVIDs, so container and process keys would describe
+    the sidecar. They, `process:name` and `process:binary:path` return with
+    Waterwheel's own agent.
 
 **Validation happens in the API server, not in a webhook:**
 
@@ -227,7 +237,8 @@ changes:
 
 - projected token volumes instead of the SPIRE socket, mounted only into the
   sidecar. There is one file per audience, named `aud-` plus a hash of the
-  audience; `waterwheel-proxy token <audience>` prints a token's claims;
+  audience; `waterwheel-proxy token <audience>` prints a token's claims. With
+  SPIRE, the socket comes back, from a CSI volume;
 - the CA key volume;
 - the CA bundle mounts and env vars below. A pod annotated
   `waterwheel.riptides.io/ca-bundle: env-only` gets the env vars without the
@@ -283,51 +294,99 @@ express that date. Java comes later.
 - Java trust stores.
 - Secret-backed sources (M2).
 - Federation.
-- The SPIFFE identity sources (below).
+- Waterwheel's own agent and signer (below).
 
-## Other identity sources (later)
+## SPIFFE identity sources
 
 Both are selected with `identity.source`, and both use the same bindings API,
 injector, proxy and API. They add `WorkloadIdentity`, whose selectors can tell
-apart pods, and containers within a pod, that share a service account. They
-also give SPIFFE IDs, which can span clusters in one trust domain.
+apart pods that share a service account. They also give SPIFFE IDs, which can
+span clusters in one trust domain.
 
 ### SPIRE
 
-SPIRE comes from SPIFFE's Helm charts (`spiffe/helm-charts-hardened`; chart
-0.30.4 ships SPIRE 1.15.5), or an existing install is used.
+The `spire` source, since 2026-11-03. SPIRE comes from SPIFFE's Helm charts
+(`spiffe/helm-charts-hardened`; chart 0.30.4 ships SPIRE 1.15.5), or an
+existing install is used. It needs SPIRE's controller manager and CSI driver.
+`hack/spire.sh` installs it on kind.
 
-- **Registration.** For each `WorkloadIdentity` selector entry, the controller
-  writes one ClusterSPIFFEID:
+- **Which identity a pod gets.** The controller decides, and tells both SPIRE
+  and the proxy, so the two agree (`internal/identity`):
+  - A pod gets the workload ID of the WorkloadIdentity whose selector entry
+    matches it. Only identities in the pod's namespace and in
+    `waterwheel-system` apply. One outside `waterwheel-system` only selects
+    pods in its own namespace.
+  - When entries of several identities match, the most specific wins: the
+    entry that has every key and value of the others, and more. A
+    namespace-wide identity can have exceptions that way. The general
+    identity's `Shadowed` condition names the specific ones.
+  - When no entry is the most specific, the pod gets no identity, so no
+    bindings. The proxy logs why.
+  - Two identities with the same selector entry and different workload IDs
+    would always tie. The newer one isn't put into effect: its `Ready`
+    condition is False, with reason `SelectorsOverlap`. The platform's webhook
+    rejects such an identity at admission. Waterwheel checks nothing across
+    objects at admission, so here it is status.
+- **Registration.** For each selector entry of an identity in effect, the
+  controller writes one ClusterSPIFFEID, named
+  `waterwheel.<namespace>.<name>.<entry>`:
   - its `spiffeIDTemplate` is `spiffe://{{ .TrustDomain }}/<workloadID>`;
-  - its namespace selector is pinned to the identity's namespace;
-  - its `className` is the SPIRE install's;
-  - it carries Waterwheel's labels, and a finalizer on the `WorkloadIdentity`
-    deletes it.
+  - its namespace selector is the identity's namespace, and the label keys
+    become its pod selector;
+  - its workload selectors are the service account and pod name keys, plus
+    `k8s:container-name:waterwheel-proxy`, so only the sidecar gets the SVID;
+  - its `className` is the SPIRE install's (chart value `spire.className`);
+  - it is labeled `app.kubernetes.io/managed-by: waterwheel-controller`.
+    ClusterSPIFFEIDs are cluster-scoped, so a WorkloadIdentity can't own them.
+    Rather than keep finalizers, the controller deletes the labeled ones it no
+    longer wants. It syncs after every change and every five minutes.
 - **Turn off SPIRE's default ClusterSPIFFEID.** It gives every pod
-  `spiffe://<td>/ns/<ns>/sa/<sa>`, which would bypass the selectors. Waterwheel's
-  install turns it off.
+  `spiffe://<td>/ns/<ns>/sa/<sa>`, which would bypass the selectors.
+  `hack/spire.sh` turns it off.
 - **Selectors map like this:**
 
-| Waterwheel | SPIRE |
+| Waterwheel | ClusterSPIFFEID |
 |---|---|
-| `k8s:pod:namespace` | `namespaceSelector` |
+| `k8s:pod:namespace` | `namespaceSelector` on `kubernetes.io/metadata.name` |
 | `k8s:label:<k>` | `podSelector.matchLabels` |
 | `k8s:pod:serviceaccount` | `k8s:sa` |
 | `k8s:pod:name` | `k8s:pod-name` |
-| `k8s:container:name` / `:image` | `k8s:container-name` / `k8s:container-image` |
-| `process:uid` / `:gid` | `unix:uid` / `unix:gid` (with the `unix` attestor on) |
 
+  `k8s:container:*` and `process:*` would select the sidecar, which fetches
+  the SVIDs, so an identity with them isn't put into effect (reason
+  `UnsupportedSelector`). They return with Waterwheel's own agent.
 - **The socket.** The injector mounts SPIRE's agent socket into the sidecar
   only, from a `csi.spiffe.io` volume. That works in Pod Security `baseline`
-  namespaces.
+  namespaces. The app container gets no socket.
+- **Startup.** SPIRE issues a new pod's SVIDs several seconds after it
+  starts; 7 to 10 on kind. The proxy waits for them before it listens, within
+  the 25 seconds it allows itself for startup, so the app's first requests
+  already have an identity.
+- **Bindings.** A binding's `Ready` condition is False, with reason
+  `NoWorkloadIdentity`, until an identity in effect gives its workload ID.
+  Audiences aren't fixed, so there's no `PodsUpToDate`.
 - **Keys.** SPIRE rotates its keys, with the next key published at
   `notAfter − min(TTL/2, 30d)` and signing from `notAfter − min(TTL/6, 7d)`.
   Its OIDC discovery provider or its bundle publisher (S3 or GCS, `jwks`
   format) makes the keys available to providers. An inline upload needs a long
   `caTTL`: the chart default is 24h, and the demo used 90 days.
 
-### Waterwheel's own agent and signer
+The components with SPIRE, next to the diagram under [Components](#components):
+
+```
+ pod ─────────────────────────────────────────────┐
+ │ app ── HTTPS_PROXY ──▶ waterwheel-proxy ───────┼── token (aud waterwheel-controller) ──▶ waterwheel-controller
+ │                          ▲                     │                                          bindings, SPIFFE ID
+ │       Workload API (CSI socket), sidecar only  │                                                   │
+ └──────────────────────────┼─────────────────────┘                                                   │ ClusterSPIFFEIDs
+                            │                                                                         ▼
+          spire-agent ──────┘ attests the sidecar ◀── entries, SVIDs ────────────────────────── spire-server
+                              issues JWT-SVIDs
+
+ waterwheel-proxy ── JWT-SVID → access token (tokenex) ──▶ provider STS ── checks SPIRE's JWKS
+```
+
+### Waterwheel's own agent and signer (later)
 
 This is the original plan:
 
@@ -363,6 +422,13 @@ This is the original plan:
   token. SPIRE, and then Waterwheel's own agent, come later as identity sources
   behind the same API. Bindings come from the controller, authenticated by
   TokenReview, for every source.
+- **2026-11-03 – SPIRE source.** The controller works out each pod's
+  WorkloadIdentity, writes the ClusterSPIFFEIDs from the same result, and
+  names the SPIFFE ID in the bindings API, so SPIRE and the proxy agree. When
+  several identities match a pod, the most specific entry wins. Identities
+  with the same selectors are the platform's admission rule, applied as
+  status: the newer one isn't put into effect. Only pod selectors apply,
+  because the sidecar is the SVID's caller.
 - **2026-11-02 – Repository.** The code is planned to move into the tokenex
   repo as its root module, under the tokenex name and Apache-2.0. The library
   moves to its own module and keeps its MIT license. The timing is open.

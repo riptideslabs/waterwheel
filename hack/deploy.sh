@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Install or upgrade Waterwheel in the kind cluster with the locally built images.
+# Install or upgrade Waterwheel in the kind cluster with the locally built
+# images. IDENTITY_SOURCE=spire installs SPIRE first.
 source "$(dirname "$0")/lib.sh"
+
+source="${IDENTITY_SOURCE:-serviceAccountToken}"
+[ "$source" != spire ] || "$ROOT/hack/spire.sh"
 
 # Helm installs CRDs only on first install; apply them so changes land. Helm
 # also claims their fields then, so take them over.
@@ -13,6 +17,7 @@ extra=()
 
 helm upgrade --install waterwheel "$ROOT/charts/waterwheel" \
   --namespace waterwheel-system --create-namespace "${extra[@]}" \
+  --set identity.source="$source" \
   --set trustDomain="${TRUST_DOMAIN:-waterwheel.test}" \
   --set issuer="${JWT_ISSUER:-https://oidc.waterwheel.test}" \
   --set image.tag="${IMAGE_TAG:-dev}" \

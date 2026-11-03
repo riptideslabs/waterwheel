@@ -32,9 +32,13 @@ spec:
       - name: fake-provider
         image: waterwheel-e2e-fakeprovider:dev
         imagePullPolicy: IfNotPresent
+        # setup.sh fills in the subject the e2e expects, and with E2E_IDENTITY=spire,
+        # where SPIRE's keys are.
         env:
         - {name: AUDIENCE, value: "https://sts.fake.waterwheel.test/token"}
-        - {name: ALLOWED_SUBJECTS, value: "system:serviceaccount:support:support-bot"}
+        - {name: ALLOWED_SUBJECTS, value: "SUBJECT"}
+        - {name: JWKS_URL, value: "JWKS_URL"}
+        - {name: ISSUER, value: "ISSUER"}
         ports:
         - containerPort: 8443
         readinessProbe:

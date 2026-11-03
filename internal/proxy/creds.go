@@ -177,6 +177,11 @@ func (c *credentials) Get(ctx context.Context) (string, error) {
 	return "", c.lastErr
 }
 
+// failed is the credentials of a binding that has no subject token.
+type failed struct{ err error }
+
+func (f failed) Get(context.Context) (string, error) { return "", f.err }
+
 // describe is the first line of an error; some tokenex errors carry a stack trace.
 func describe(err error) string {
 	first, _, _ := strings.Cut(err.Error(), "\n")

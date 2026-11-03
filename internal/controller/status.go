@@ -20,6 +20,7 @@ import (
 
 	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/bindings"
+	"go.riptides.io/waterwheel/internal/identity"
 )
 
 // Binding conditions.
@@ -41,13 +42,23 @@ type BindingStatus struct {
 	// ServiceAccountIDsOnly is set with the serviceAccountToken identity
 	// source: a binding applies only to a workloadID ns/<ns>/sa/<sa>.
 	ServiceAccountIDsOnly bool
+	// WorkloadIdentities is set with SPIFFE sources: a binding applies to the
+	// pods of a WorkloadIdentity in effect with its workloadID.
+	WorkloadIdentities bool
 }
 
 func (r *BindingStatus) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.CredentialBinding{}).
-		Watches(&v1alpha1.CredentialSource{}, handler.EnqueueRequestsFromMapFunc(r.bindingsOfSource)).
-		Complete(r)
+		Watches(&v1alpha1.CredentialSource{}, handler.EnqueueRequestsFromMapFunc(r.bindingsOfSource))
+
+	// Whether an identity is in effect can depend on the others, so any
+	// change may affect any binding.
+	if r.WorkloadIdentities {
+		b = b.Watches(&v1alpha1.WorkloadIdentity{}, handler.EnqueueRequestsFromMapFunc(r.allBindings))
+	}
+
+	return b.Complete(r)
 }
 
 func (r *BindingStatus) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -57,13 +68,13 @@ func (r *BindingStatus) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	ready, audience := r.ready(ctx, &b)
-	changed := setCondition(&b, ready)
+	changed := setCondition(&b, &b.Status.Conditions, ready)
 
 	var result ctrl.Result
 
 	if ready.Status == metav1.ConditionTrue && r.ServiceAccountIDsOnly {
 		pods := r.podsUpToDate(ctx, &b, audience)
-		changed = setCondition(&b, pods) || changed
+		changed = setCondition(&b, &b.Status.Conditions, pods) || changed
 
 		// Pod restarts don't trigger a reconcile; look again later.
 		if pods.Status != metav1.ConditionTrue {
@@ -80,10 +91,10 @@ func (r *BindingStatus) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	return result, r.Client.Status().Update(ctx, &b)
 }
 
-func setCondition(b *v1alpha1.CredentialBinding, c metav1.Condition) bool {
-	c.ObservedGeneration = b.Generation
+func setCondition(obj client.Object, conds *[]metav1.Condition, c metav1.Condition) bool {
+	c.ObservedGeneration = obj.GetGeneration()
 
-	return meta.SetStatusCondition(&b.Status.Conditions, c)
+	return meta.SetStatusCondition(conds, c)
 }
 
 // ready returns the Ready condition and, when ready, the subject token audience.
@@ -99,6 +110,17 @@ func (r *BindingStatus) ready(ctx context.Context, b *v1alpha1.CredentialBinding
 	if _, _, ok := bindings.ParseServiceAccountID(b.Spec.WorkloadID); r.ServiceAccountIDsOnly && !ok {
 		return notReady("NotAServiceAccount",
 			"with service account tokens, workloadID must be ns/<namespace>/sa/<service account>"), ""
+	}
+
+	if r.WorkloadIdentities {
+		var wids v1alpha1.WorkloadIdentityList
+		if err := r.Client.List(ctx, &wids); err != nil {
+			return metav1.Condition{Type: ConditionReady, Status: metav1.ConditionUnknown, Reason: "ListFailed", Message: err.Error()}, ""
+		}
+
+		if !identity.Build(wids.Items, r.SystemNamespace).Has(b.Namespace, b.Spec.WorkloadID) {
+			return notReady("NoWorkloadIdentity", "no WorkloadIdentity in effect gives pods "+b.Spec.WorkloadID), ""
+		}
 	}
 
 	res, err := bindings.Resolve(ctx, r.Client, b)
@@ -153,6 +175,21 @@ func (r *BindingStatus) podsUpToDate(ctx context.Context, b *v1alpha1.Credential
 		Message: fmt.Sprintf("%d pod(s) started before the binding needed a token for %s; restart them: %s",
 			len(stale), audience, strings.Join(shown, ", ")),
 	}
+}
+
+// allBindings maps any change to every binding.
+func (r *BindingStatus) allBindings(ctx context.Context, _ client.Object) []reconcile.Request {
+	var list v1alpha1.CredentialBindingList
+	if err := r.Client.List(ctx, &list); err != nil {
+		return nil
+	}
+
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for _, b := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&b)})
+	}
+
+	return reqs
 }
 
 // bindingsOfSource maps a CredentialSource to the bindings that use it.

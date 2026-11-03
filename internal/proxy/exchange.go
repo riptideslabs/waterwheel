@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
 
 	"go.riptides.io/tokenex/pkg/azure"
 	"go.riptides.io/tokenex/pkg/credential"
@@ -22,6 +24,7 @@ import (
 	"go.riptides.io/tokenex/pkg/rfc7523"
 	"go.riptides.io/tokenex/pkg/rfc8693"
 	"go.riptides.io/tokenex/pkg/token"
+	"go.riptides.io/tokenex/pkg/token/spiffe"
 	"go.riptides.io/waterwheel/internal/bindings"
 )
 
@@ -29,6 +32,31 @@ var (
 	errNotJWT     = errors.New("not a JWT")
 	errNoProvider = errors.New("the source names no provider")
 )
+
+// Subjects returns a binding's subject token provider, for the pod's SPIFFE
+// ID (empty with service account tokens).
+type Subjects func(spiffeID string, b bindings.Binding) (token.IdentityTokenProvider, error)
+
+// TokenFiles gives each binding the pod's projected service account token for
+// its audience, from dir.
+func TokenFiles(dir string) Subjects {
+	return func(_ string, b bindings.Binding) (token.IdentityTokenProvider, error) {
+		return TokenFile(dir, b.Audience), nil
+	}
+}
+
+// SPIRE gives each binding a JWT-SVID for the pod's SPIFFE ID and the
+// binding's audience, fetched from the Workload API on every exchange.
+func SPIRE(source jwtsvid.Source) Subjects {
+	return func(spiffeID string, b bindings.Binding) (token.IdentityTokenProvider, error) {
+		id, err := spiffeid.FromString(spiffeID)
+		if err != nil {
+			return nil, fmt.Errorf("SPIFFE ID %q: %w", spiffeID, err)
+		}
+
+		return spiffe.NewIdentityTokenProvider(spiffe.WithAudience(b.Audience), spiffe.WithSPIFFEID(id), spiffe.WithSource(source))
+	}
+}
 
 // TokenFile is the subject token provider for an audience: the pod's projected
 // service account token, read on every call because the kubelet rotates it.

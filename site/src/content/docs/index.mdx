@@ -20,7 +20,7 @@ hero:
       variant: minimal
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 import Architecture from '../../components/Architecture.astro';
 import Features from '../../components/Features.astro';
 import Feature from '../../components/Feature.astro';
@@ -36,13 +36,18 @@ Anthropic, OpenAI and the cloud providers now offer workload identity federation
 
 We presented the idea at KCD Budapest on 30 October 2026. In the live demo, a pod with no key called Claude: SPIRE gave it an identity, [tokenex](https://github.com/riptideslabs/tokenex) exchanged that for a short-lived Anthropic token, and an egress sidecar added the token on the way out.
 
-Waterwheel turns that demo into a product. The pod's service account token takes SPIRE's place, so there's nothing extra to install, and the first milestone runs the demo's five steps as an automated test.
+Waterwheel turns that demo into a product. By default the pod's service account token takes SPIRE's place, so there's nothing extra to install. SPIRE is still an option, and the demo's five steps run as an automated test with both.
 
 <Talk />
 
 ## How it works
 
 The example is `support-bot`, a Python service in the `support` namespace that answers customer tickets with Claude through Anthropic's Python SDK.
+
+The pod's identity comes from its Kubernetes service account token, the default, or from SPIRE. Everything else works the same way.
+
+<Tabs syncKey="identity-source">
+<TabItem label="Service account tokens">
 
 <Architecture>
   Waterwheel's components have teal outlines. The app never sees a key or a token: the service account tokens are mounted only into the sidecar, and the Anthropic token only exists in its memory.
@@ -63,6 +68,32 @@ The example is `support-bot`, a Python service in the `support` namespace that a
 6. The proxy adds the token to the request and sends it on.
 
 </Steps>
+
+</TabItem>
+<TabItem label="SPIRE">
+
+<Architecture spire>
+  Waterwheel's components have teal outlines. The app never sees a key, a token or the SPIRE socket: the Workload API is mounted only into the sidecar, and the tokens only exist in its memory.
+</Architecture>
+
+<Steps>
+
+1. `waterwheel-controller` registers the pod's `WorkloadIdentity` with SPIRE, as ClusterSPIFFEIDs. Its selectors pick the pods; the most specific match wins.
+
+2. The SPIRE agent on the node attests `waterwheel-proxy` and issues it JWT-SVIDs, for any audience, through a Workload API socket only the sidecar mounts.
+
+3. The proxy asks `waterwheel-controller` for its bindings, which also tell it the pod's SPIFFE ID. It proves who it is with a service account token, checked with a TokenReview.
+
+4. The app sends its request through `HTTPS_PROXY`, which the injector set. It has no key.
+
+5. The proxy exchanges a JWT-SVID at Anthropic for a short-lived token. Anthropic checks it against SPIRE's published keys, and that its subject is `spiffe://example.org/ns/support/support-bot`.
+
+6. The proxy adds the token to the request and sends it on.
+
+</Steps>
+
+</TabItem>
+</Tabs>
 
 ## The example in code
 
@@ -130,7 +161,7 @@ kubectl label namespace support waterwheel.riptides.io/inject=enabled
     The app container gets no key, no token and no socket. A shell in the pod finds nothing to steal.
   </Feature>
   <Feature title="Nothing extra to run">
-    Kubernetes signs and rotates the identity tokens, so there's no agent on the nodes. SPIFFE identities from SPIRE are planned for finer-grained identities.
+    Kubernetes signs and rotates the identity tokens, so there's no agent on the nodes. With SPIRE, WorkloadIdentity selectors give pods that share a service account their own SPIFFE IDs.
   </Feature>
   <Feature title="Namespaces are the boundary">
     A binding only applies to service accounts in its own namespace. This is checked at admission and again when the controller hands out bindings.

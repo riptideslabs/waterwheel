@@ -79,11 +79,14 @@ by binding `system:service-account-issuer-discovery` to
 `system:unauthenticated`. It puts the API server on the internet, though, so
 the bucket is better.
 
-## With SPIRE (later)
+## With SPIRE
 
 With the `spire` identity source, the subject tokens are JWT-SVIDs, so SPIRE's
 keys are the ones to publish. `global.spire.jwtIssuer` in SPIFFE's `spire`
-chart sets the issuer. There are three ways:
+chart sets the issuer; it defaults to `https://oidc-discovery.<trust domain>`.
+A provider's rule then matches `sub = spiffe://<trust domain>/<workloadID>`.
+The e2e's fake provider reads the keys from the OIDC discovery provider inside
+the cluster, over plain HTTP. For a real provider, there are three ways:
 
 - **Ingress.** Expose SPIRE's OIDC discovery provider, which the chart deploys
   by default, with

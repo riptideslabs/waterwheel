@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -31,11 +32,13 @@ type Proxy struct {
 	Upstream http.RoundTripper
 	// Dialer opens tunnels.
 	Dialer *net.Dialer
-	// NewTokens starts the credentials of a binding; it runs until ctx ends.
-	NewTokens func(ctx context.Context, b bindings.Binding) Tokens
+	// NewTokens starts the credentials of a binding for the pod's SPIFFE ID
+	// (empty with service account tokens); it runs until ctx ends.
+	NewTokens func(ctx context.Context, spiffeID string, b bindings.Binding) Tokens
 
 	mu       sync.RWMutex
 	identity string
+	spiffeID string
 	routes   []*route
 	ready    chan struct{}
 	once     sync.Once
@@ -47,9 +50,9 @@ type route struct {
 	cancel  context.CancelFunc
 }
 
-// New returns a proxy whose bindings get tokens from tokenex, using the
-// projected tokens in tokenDir.
-func New(ca *CA, tokenDir string) *Proxy {
+// New returns a proxy whose bindings get tokens from tokenex, exchanging the
+// subject tokens from subjects.
+func New(ca *CA, subjects Subjects) *Proxy {
 	p := &Proxy{
 		CA: ca,
 		Upstream: &http.Transport{
@@ -62,9 +65,17 @@ func New(ca *CA, tokenDir string) *Proxy {
 		Dialer: &net.Dialer{Timeout: 10 * time.Second},
 	}
 
-	p.NewTokens = func(ctx context.Context, b bindings.Binding) Tokens {
+	p.NewTokens = func(ctx context.Context, spiffeID string, b bindings.Binding) Tokens {
 		log := slog.With("binding", b.Namespace+"/"+b.Name, "provider", ProviderName(b))
-		c := newCredentials(b, TokenFile(tokenDir, b.Audience), log)
+
+		subject, err := subjects(spiffeID, b)
+		if err != nil {
+			log.Warn("no subject token", "err", err)
+
+			return failed{err}
+		}
+
+		c := newCredentials(b, subject, log)
 
 		go c.run(ctx)
 
@@ -72,6 +83,14 @@ func New(ca *CA, tokenDir string) *Proxy {
 	}
 
 	return p
+}
+
+// SPIFFEID is the pod's SPIFFE ID from the latest snapshot, with SPIFFE sources.
+func (p *Proxy) SPIFFEID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	return p.spiffeID
 }
 
 // Ready is closed once the first bindings snapshot has arrived.
@@ -87,13 +106,20 @@ func (p *Proxy) Ready() <-chan struct{} {
 }
 
 // Update applies a bindings snapshot. Unchanged bindings keep their tokens;
-// changed and new ones start their exchange; removed ones stop.
+// changed and new ones start their exchange; removed ones stop. A new SPIFFE
+// ID changes every binding's subject token, so they all start over.
 func (p *Proxy) Update(ctx context.Context, snap bindings.Snapshot) {
 	p.mu.Lock()
 
 	old := map[string]*route{}
-	for _, r := range p.routes {
-		old[r.binding.Namespace+"/"+r.binding.Name] = r
+	if snap.SPIFFEID == p.spiffeID {
+		for _, r := range p.routes {
+			old[r.binding.Namespace+"/"+r.binding.Name] = r
+		}
+	} else {
+		for _, r := range p.routes {
+			r.cancel()
+		}
 	}
 
 	routes := make([]*route, 0, len(snap.Bindings))
@@ -108,14 +134,14 @@ func (p *Proxy) Update(ctx context.Context, snap bindings.Snapshot) {
 		}
 
 		rctx, cancel := context.WithCancel(ctx)
-		routes = append(routes, &route{binding: b, tokens: p.NewTokens(rctx, b), cancel: cancel})
+		routes = append(routes, &route{binding: b, tokens: p.NewTokens(rctx, snap.SPIFFEID, b), cancel: cancel})
 	}
 
 	for _, r := range old {
 		r.cancel()
 	}
 
-	p.identity, p.routes = snap.Identity, routes
+	p.identity, p.spiffeID, p.routes = cmp.Or(snap.SPIFFEID, snap.Identity), snap.SPIFFEID, routes
 
 	if p.ready == nil {
 		p.ready = make(chan struct{})
@@ -132,7 +158,14 @@ func (p *Proxy) Update(ctx context.Context, snap bindings.Snapshot) {
 		}
 	}
 
-	slog.Info("bindings", "identity", snap.Identity, "count", len(routes), "intercepting", strings.Join(hosts, ", "))
+	if snap.Reason != "" {
+		slog.Warn("no identity, so no bindings", "reason", snap.Reason)
+
+		return
+	}
+
+	slog.Info("bindings", "identity", cmp.Or(snap.SPIFFEID, snap.Identity), "count", len(routes),
+		"intercepting", strings.Join(hosts, ", "))
 }
 
 // match returns the route for a destination, or nil to tunnel it.

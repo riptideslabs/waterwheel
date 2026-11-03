@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 # Put the demo back to the state before step 1: the support namespace without
-# injection, a plain curl pod, and its CredentialSource and CredentialBinding.
+# injection, a plain curl pod, and its CredentialSource and CredentialBinding;
+# with SPIRE, its WorkloadIdentity too.
 source "$(dirname "$0")/lib.sh"
 
+identity() {
+  [ "$E2E_IDENTITY" = spire ] || return 0
+  cat <<EOF
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: support-bot, namespace: support}
+spec:
+  workloadID: $WORKLOAD_ID
+  selectors:
+  - k8s:pod:serviceaccount: support-bot
+    k8s:label:app: support-bot
+---
+EOF
+}
+
 credentials() {
+  identity
   if [ "$E2E_PROVIDER" = fake ]; then
-    cat <<'EOF'
+    cat <<EOF
 apiVersion: core.riptides.io/v1alpha1
 kind: CredentialSource
 metadata: {name: fake-provider, namespace: support}
@@ -17,7 +34,7 @@ apiVersion: core.riptides.io/v1alpha1
 kind: CredentialBinding
 metadata: {name: support-bot-fake, namespace: support}
 spec:
-  workloadID: ns/support/sa/support-bot
+  workloadID: $WORKLOAD_ID
   credentialSource: fake-provider
   propagation:
     injection:
@@ -46,7 +63,7 @@ apiVersion: core.riptides.io/v1alpha1
 kind: CredentialBinding
 metadata: {name: support-bot-anthropic, namespace: support}
 spec:
-  workloadID: ns/support/sa/support-bot
+  workloadID: $WORKLOAD_ID
   credentialSource: anthropic
   propagation:
     injection:

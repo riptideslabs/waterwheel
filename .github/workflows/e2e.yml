@@ -10,10 +10,16 @@ permissions:
   contents: read
 
 jobs:
-  # The KCD demo's five steps on kind, against the offline fake provider.
+  # The KCD demo's five steps on kind, against the offline fake provider, with
+  # each identity source.
   kind:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        identity: [serviceAccountToken, spire]
+    name: kind (${{ matrix.identity }})
     steps:
       - uses: actions/checkout@v7
 
@@ -27,6 +33,7 @@ jobs:
       - name: make e2e
         env:
           LIMA_VM: "" # Docker and kind on the runner
+          E2E_IDENTITY: ${{ matrix.identity }}
         run: make e2e
 
       - name: Cluster state
@@ -38,3 +45,5 @@ jobs:
           kubectl -n waterwheel-system logs deploy/waterwheel-controller --tail=100 || true
           kubectl -n support logs deploy/support-bot -c waterwheel-proxy --tail=100 || true
           kubectl -n waterwheel-e2e logs deploy/fake-provider --tail=100 || true
+          kubectl get workloadidentities,credentialbindings -A -o wide || true
+          kubectl get clusterspiffeids -o name || true

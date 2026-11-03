@@ -4,7 +4,8 @@ Waterwheel turns a pod's identity into the API credentials it needs, so no pod
 holds a long-lived key. A sidecar exchanges the pod's Kubernetes service
 account token for a short-lived provider token (Anthropic, OpenAI, Google
 Cloud, Azure, or any RFC 7523 / RFC 8693 endpoint) and adds it to the app's
-HTTPS requests. SPIFFE identities from SPIRE are planned as an option.
+HTTPS requests. With SPIRE, it exchanges a JWT-SVID instead, for the pod's
+`WorkloadIdentity`.
 
 - `waterwheel-controller`: serves each sidecar its bindings and injects the
   sidecar.
@@ -29,7 +30,8 @@ make site       # the project page (site/), at http://localhost:4321
 
 `make e2e` runs against an offline fake provider. `E2E_PROVIDER=anthropic`
 uses the real API with the IDs in a gitignored `providers.env`; see
-[docs/milestone-1.md](docs/milestone-1.md).
+[docs/milestone-1.md](docs/milestone-1.md). `E2E_IDENTITY=spire` installs
+SPIRE and runs the same steps with JWT-SVIDs.
 
 `LIMA_VM= make dev` uses Docker and kind on the local machine instead of Lima.
 Behind a TLS-intercepting proxy (like a Riptides workstation with MITM on),

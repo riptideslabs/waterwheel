@@ -24,7 +24,11 @@ import (
 
 // Snapshot is everything a proxy needs: the bindings of one workload identity.
 type Snapshot struct {
-	Identity string    `json:"identity"`
+	Identity string `json:"identity"`
+	// SPIFFEID is the SVID the proxy asks for, with SPIFFE sources.
+	SPIFFEID string `json:"spiffeID,omitempty"`
+	// Reason says why the pod has no identity, with SPIFFE sources.
+	Reason   string    `json:"reason,omitempty"`
 	Bindings []Binding `json:"bindings"`
 }
 

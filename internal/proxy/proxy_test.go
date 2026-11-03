@@ -69,10 +69,10 @@ func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
 		t.Fatal(err)
 	}
 
-	s.proxy = proxy.New(ca, t.TempDir())
+	s.proxy = proxy.New(ca, proxy.TokenFiles(t.TempDir()))
 	// The proxy trusts the bound test server's certificate upstream.
 	s.proxy.Upstream = s.bound.Client().Transport
-	s.proxy.NewTokens = func(context.Context, bindings.Binding) proxy.Tokens {
+	s.proxy.NewTokens = func(context.Context, string, bindings.Binding) proxy.Tokens {
 		s.starts.Add(1)
 
 		return tokens
@@ -181,5 +181,26 @@ func TestNoToken(t *testing.T) {
 	status, got := call(t, s.client, s.bound.URL)
 	if status != http.StatusForbidden || got["authorization"] != "" {
 		t.Errorf("status %d, body %v; want 403 without reaching upstream", status, got)
+	}
+}
+
+func TestNewSPIFFEIDRestartsCredentials(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{})
+
+	for _, id := range []string{"spiffe://waterwheel.test/a", "spiffe://waterwheel.test/a", "spiffe://waterwheel.test/b"} {
+		snap := snapshot(t, s.bound.URL)
+		snap.SPIFFEID = id
+		s.proxy.Update(t.Context(), snap)
+	}
+
+	// The setup's snapshot, then one for each new SPIFFE ID.
+	if n := s.starts.Load(); n != 3 {
+		t.Errorf("credentials started %d times; want 3", n)
+	}
+
+	if got := s.proxy.SPIFFEID(); got != "spiffe://waterwheel.test/b" {
+		t.Errorf("SPIFFEID() = %q", got)
 	}
 }

@@ -27,6 +27,23 @@ anthropic)
 *) die "E2E_PROVIDER must be fake or anthropic, not $E2E_PROVIDER" ;;
 esac
 
+# serviceAccountToken: the pod's projected token is its identity. spire: SPIRE
+# gives it a JWT-SVID, for the WorkloadIdentity reset.sh creates.
+E2E_IDENTITY="${E2E_IDENTITY:-serviceAccountToken}"
+TRUST_DOMAIN="${TRUST_DOMAIN:-waterwheel.test}"
+
+case "$E2E_IDENTITY" in
+serviceAccountToken)
+  WORKLOAD_ID=ns/support/sa/support-bot
+  SUBJECT=system:serviceaccount:support:support-bot
+  ;;
+spire)
+  WORKLOAD_ID=ns/support/support-bot
+  SUBJECT="spiffe://$TRUST_DOMAIN/$WORKLOAD_ID"
+  ;;
+*) die "E2E_IDENTITY must be serviceAccountToken or spire, not $E2E_IDENTITY" ;;
+esac
+
 # --- stage output -----------------------------------------------------------
 
 B=$'\033[1m' DIM=$'\033[2m' CYAN=$'\033[36m' YELLOW=$'\033[33m' RED=$'\033[1;31m' R=$'\033[0m'

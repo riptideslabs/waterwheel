@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepare the cluster for the e2e: the e2e CA, the fake provider and its DNS
-# names, the test app image, and Waterwheel with the e2e CA as an extra root.
-# Safe to run again.
+# names, the test app image, and Waterwheel with the e2e CA as an extra root;
+# with E2E_IDENTITY=spire, SPIRE too. Safe to run again.
 source "$(dirname "$0")/lib.sh"
 
 mkdir -p "$E2E_STATE"
@@ -24,8 +24,17 @@ vm docker build -q -t waterwheel-e2e-curl:dev .state/images/e2e-curl >/dev/null
 
 vm "$KIND" load docker-image --name "$CLUSTER_NAME" waterwheel-e2e-fakeprovider:dev waterwheel-e2e-curl:dev >/dev/null
 
+# With SPIRE, the fake provider checks JWT-SVIDs against the keys SPIRE's OIDC
+# discovery provider serves, as a real provider would.
+jwks="" issuer=""
+if [ "$E2E_IDENTITY" = spire ]; then
+  jwks=http://spire-spiffe-oidc-discovery-provider.spire-server/keys
+  issuer="https://oidc-discovery.$TRUST_DOMAIN"
+fi
+
 log "deploying the fake provider"
-kubectl apply -f "$E2E/manifests/fakeprovider.yaml" >/dev/null
+sed -e "s|\"SUBJECT\"|\"$SUBJECT\"|" -e "s|\"JWKS_URL\"|\"$jwks\"|" -e "s|\"ISSUER\"|\"$issuer\"|" \
+  "$E2E/manifests/fakeprovider.yaml" | kubectl apply -f - >/dev/null
 kubectl -n waterwheel-e2e create secret tls fake-provider-tls \
   --cert="$E2E_STATE/tls.crt" --key="$E2E_STATE/tls.key" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 # Pick up a rebuilt image (the tag doesn't change).
@@ -47,8 +56,9 @@ fi
 # The e2e CA, plus the caller's extra roots (e.g. a TLS-intercepting proxy's
 # between the cluster and the internet), become waterwheel-extra-roots.
 cat "$E2E_STATE/ca.crt" ${EXTRA_ROOTS_FILE:+"$EXTRA_ROOTS_FILE"} >"$E2E_STATE/extra-roots.pem"
-EXTRA_ROOTS_FILE="$E2E_STATE/extra-roots.pem" "$ROOT/hack/deploy.sh"
+EXTRA_ROOTS_FILE="$E2E_STATE/extra-roots.pem" IDENTITY_SOURCE="$E2E_IDENTITY" TRUST_DOMAIN="$TRUST_DOMAIN" \
+  "$ROOT/hack/deploy.sh"
 
 # The stage commands run in the demo's namespace.
 kubectl config set-context --current --namespace=support >/dev/null
-log "e2e setup done (provider: $E2E_PROVIDER)"
+log "e2e setup done (provider: $E2E_PROVIDER, identity: $E2E_IDENTITY)"

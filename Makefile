@@ -42,7 +42,7 @@ chart: ## helm lint, and render the chart for each identity source
 		--set issuer=https://oidc.example.com --set oidc.ingress.enabled=true --set oidc.ingress.host=oidc.example.com >/dev/null
 
 shellcheck: ## shellcheck the scripts
-	shellcheck -x -P SCRIPTDIR hack/*.sh
+	shellcheck -x -P SCRIPTDIR hack/*.sh test/e2e/*.sh test/e2e/steps/*.sh
 
 site: ## Serve the project page (site/) at http://localhost:4321
 	cd site && npm install && npm run dev
@@ -63,7 +63,7 @@ cluster: ## Create the kind cluster "waterwheel" and .state/kubeconfig
 images: ## Build the images and load them into kind
 	@hack/images.sh
 
-deploy: ## Install or upgrade Waterwheel in the kind cluster
+deploy: ## Install or upgrade Waterwheel in the kind cluster (IDENTITY_SOURCE=spire installs SPIRE too)
 	@hack/deploy.sh
 
 dev: vm cluster images deploy ## Everything: VM, cluster, images, Waterwheel
@@ -71,7 +71,7 @@ dev: vm cluster images deploy ## Everything: VM, cluster, images, Waterwheel
 api-check: ## Dry-run the API samples in test/api against the cluster
 	@hack/api-check.sh
 
-e2e: vm cluster images e2e-setup e2e-reset ## The KCD demo's five steps, checked (E2E_PROVIDER=fake|anthropic)
+e2e: vm cluster images e2e-setup e2e-reset ## The KCD demo's five steps, checked (E2E_PROVIDER=fake|anthropic, E2E_IDENTITY=serviceAccountToken|spire)
 	@test/e2e/steps/all.sh
 
 e2e-setup: ## Fake provider, test images, DNS, and Waterwheel with the e2e CA

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.riptides.io/waterwheel/internal/bindings"
+	"go.riptides.io/waterwheel/internal/identity"
 )
 
 // Audience is the audience of the projected token proxies present to the
@@ -38,11 +39,17 @@ type Caller struct {
 	Namespace      string
 	ServiceAccount string
 	Pod            string
+	Labels         map[string]string
 }
 
-// Identity is the caller's workload ID.
+// Identity is the caller's workload ID with service account tokens.
 func (c Caller) Identity() string {
 	return bindings.ServiceAccountID(c.Namespace, c.ServiceAccount)
+}
+
+// Selectable is what WorkloadIdentity selectors match.
+func (c Caller) Selectable() identity.Pod {
+	return identity.Pod{Namespace: c.Namespace, Name: c.Pod, ServiceAccount: c.ServiceAccount, Labels: c.Labels}
 }
 
 // Authenticator turns a bearer token into the calling pod.
@@ -96,7 +103,7 @@ func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller,
 		return Caller{}, errNotPod
 	}
 
-	return Caller{Namespace: ns, ServiceAccount: sa, Pod: podName}, nil
+	return Caller{Namespace: ns, ServiceAccount: sa, Pod: podName, Labels: pod.Labels}, nil
 }
 
 func single(v authnv1.ExtraValue) string {

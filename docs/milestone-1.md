@@ -162,7 +162,8 @@ cluster lives.
    federation rule in the Anthropic Console, which needs Nándor's OK.
 
 Not in M1:
-- the SPIRE source and Waterwheel's own agent;
+- the SPIRE source, added on 2026-11-03 (see design.md), and Waterwheel's own
+  agent;
 - multiple controller replicas;
 - Secret-backed sources.
 
