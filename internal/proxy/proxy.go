@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -284,8 +285,9 @@ func hijack(w http.ResponseWriter) (net.Conn, bool) {
 	return conn, true
 }
 
-// intercept terminates TLS with a leaf from the pod CA and serves HTTP/1.1 on
-// the decrypted connection until the client closes it.
+// intercept terminates TLS with a leaf from the pod CA and serves HTTP/1.1,
+// WebSocket upgrades included, on the decrypted connection until the client
+// closes it.
 func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identity string) {
 	cert, err := p.CA.Leaf(host)
 	if err != nil {
@@ -407,6 +409,13 @@ func (r *statusRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack lets the reverse proxy switch protocols, for WebSockets.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	r.status = http.StatusSwitchingProtocols
+
+	return http.NewResponseController(r.ResponseWriter).Hijack()
 }
 
 // connListener hands one connection to http.Server, then blocks until closed.

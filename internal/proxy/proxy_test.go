@@ -3,6 +3,7 @@
 package proxy_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,7 +23,10 @@ import (
 	"go.riptides.io/waterwheel/internal/proxy"
 )
 
-const testIdentity = "ns/support/sa/bot"
+const (
+	testIdentity = "ns/support/sa/bot"
+	testToken    = "tok-1"
+)
 
 var errDenied = errors.New("status 401: denied")
 
@@ -33,8 +37,15 @@ type staticTokens struct {
 
 func (s staticTokens) Get(context.Context) (string, error) { return s.tok, s.err }
 
-// echo answers with the request's credential headers.
+// echo answers with the request's credential headers. A WebSocket upgrade
+// gets its Authorization header as the first line, then its own bytes back.
 func echo(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Upgrade") == "websocket" {
+		upgrade(w, r)
+
+		return
+	}
+
 	err := json.NewEncoder(w).Encode(map[string]string{
 		"authorization": r.Header.Get("Authorization"),
 		"x-api-key":     r.Header.Get("X-Api-Key"),
@@ -43,6 +54,21 @@ func echo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func upgrade(w http.ResponseWriter, r *http.Request) {
+	conn, brw, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+	defer conn.Close()
+
+	_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n" +
+		r.Header.Get("Authorization") + "\n")
+	_ = brw.Flush()
+	_, _ = io.Copy(conn, brw.Reader)
 }
 
 type setup struct {
@@ -143,14 +169,14 @@ func call(t *testing.T, c *http.Client, target string) (int, map[string]string) 
 func TestInterceptAddsToken(t *testing.T) {
 	t.Parallel()
 
-	s := newSetup(t, staticTokens{tok: "tok-1"})
+	s := newSetup(t, staticTokens{tok: testToken})
 
 	status, got := call(t, s.client, s.bound.URL)
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
 
-	if got["authorization"] != "Bearer tok-1" || got["x-api-key"] != "" || got["path"] != "/v1/messages" {
+	if got["authorization"] != "Bearer "+testToken || got["x-api-key"] != "" || got["path"] != "/v1/messages" {
 		t.Errorf("upstream saw %v; want the binding's token, no key", got)
 	}
 
@@ -162,10 +188,49 @@ func TestInterceptAddsToken(t *testing.T) {
 	}
 }
 
+func TestWebSocket(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: testToken})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.bound.URL+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Authorization", "Bearer unused")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	conn, ok := resp.Body.(io.ReadWriter)
+	if resp.StatusCode != http.StatusSwitchingProtocols || !ok {
+		t.Fatalf("status %d, body %T; want 101 and a connection", resp.StatusCode, resp.Body)
+	}
+
+	r := bufio.NewReader(conn)
+	if line, _ := r.ReadString('\n'); line != "Bearer "+testToken+"\n" {
+		t.Errorf("upstream saw %q; want the binding's token", line)
+	}
+
+	if _, err := io.WriteString(conn, "ping\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if line, _ := r.ReadString('\n'); line != "ping\n" {
+		t.Errorf("read %q back; want ping", line)
+	}
+}
+
 func TestPassThrough(t *testing.T) {
 	t.Parallel()
 
-	s := newSetup(t, staticTokens{tok: "tok-1"})
+	s := newSetup(t, staticTokens{tok: testToken})
 
 	status, got := call(t, s.client, s.other.URL)
 	if status != http.StatusOK || got["authorization"] != "Bearer unused" || got["x-api-key"] != "sk-placeholder" {
