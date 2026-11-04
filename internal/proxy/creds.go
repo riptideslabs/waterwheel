@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -120,9 +121,21 @@ func (c *credentials) denied() bool {
 	return denied(c.lastErr)
 }
 
-// denied: the token endpoint refused the exchange.
+// refusal finds a 4xx status in an exchange error: tokenex's "token endpoint
+// returned status 401" and "token endpoint error 400: invalid_grant", Google's
+// "Error 403" and "response code 403", and Azure's "RESPONSE 400".
+var refusal = regexp.MustCompile(`(?i)\b(?:status|error|response(?: code)?) (4\d\d)\b`)
+
+// denied: the token endpoint refused the exchange. A timeout or a rate limit
+// isn't a refusal.
 func denied(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "status 4")
+	if err == nil {
+		return false
+	}
+
+	m := refusal.FindStringSubmatch(err.Error())
+
+	return m != nil && m[1] != "408" && m[1] != "429"
 }
 
 func (c *credentials) set(access string, expiry time.Time) {
