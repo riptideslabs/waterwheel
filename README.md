@@ -24,7 +24,7 @@ This uses a fake token endpoint and API, so it needs no provider account or API
 key. It creates a local kind cluster named `waterwheel` and verifies that the
 same request fails without the proxy and succeeds after injection.
 
-Prerequisites: Go 1.25 or newer, a running Docker daemon, kind, kubectl, Helm,
+Prerequisites: Go 1.26 or newer, a running Docker daemon, kind, kubectl, Helm,
 and jq. On macOS or Linux:
 
 ```bash

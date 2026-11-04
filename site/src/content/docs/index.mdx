@@ -42,7 +42,7 @@ Waterwheel turns that demo into a product. By default the pod's service account 
 
 ## Try it locally
 
-Waterwheel is an **early preview**, with no tagged release yet. The local demo uses a fake provider, so you need no Anthropic or OpenAI account. Install Go 1.25 or newer, Docker, kind, kubectl, Helm and jq, and start Docker. Then run:
+Waterwheel is an **early preview**, with no tagged release yet. The local demo uses a fake provider, so you need no Anthropic or OpenAI account. Install Go 1.26 or newer, Docker, kind, kubectl, Helm and jq, and start Docker. Then run:
 
 ```bash
 git clone https://github.com/riptideslabs/waterwheel.git
@@ -166,16 +166,16 @@ spec:
 kubectl label namespace support waterwheel.riptides.io/inject=enabled
 ```
 
-Waterwheel leaves Kubernetes' default `automountServiceAccountToken` setting unchanged. Set it to `false` on your workload if its app containers should not receive the default service account token; Waterwheel's sidecar-only token projection still works. The demo Deployment does this.
+Waterwheel leaves `automountServiceAccountToken` alone. Set it to `false` if the app shouldn't get Kubernetes' default service account token; the sidecar's own tokens still work, and the demo does this.
 
 ## What you get
 
 <Features>
   <Feature title="No API keys in app containers">
-    The injector does not give the app a long-lived API key or mount Waterwheel's projected subject token there. Kubernetes may still mount its default service account token unless you disable automount. A compromised app can still use its authorized API access through the proxy.
+    The app gets no long-lived API key. Waterwheel's identity tokens and the SPIRE socket mount only into the sidecar.
   </Feature>
   <Feature title="No node agent required">
-    Kubernetes signs and rotates the identity tokens in the default mode. Waterwheel still installs a controller and a per-pod sidecar. SPIRE is an optional identity source.
+    Kubernetes signs and rotates the identity tokens, so the default mode runs nothing on the nodes. SPIRE is optional.
   </Feature>
   <Feature title="Namespaces are the boundary">
     A binding only applies to service accounts in its own namespace. This is checked at admission and again when the controller hands out bindings.
@@ -183,12 +183,21 @@ Waterwheel leaves Kubernetes' default `automountServiceAccountToken` setting unc
   <Feature title="Many token endpoints">
     Anthropic, OpenAI, Google Cloud and Microsoft Entra ID (Azure) federation, RFC 7523 endpoints, and RFC 8693 endpoints that accept JSON requests. AWS is next.
   </Feature>
-  <Feature title="App trust configured">
-    The injector mounts the sidecar's CA bundle and sets common trust variables. The provider must also trust your cluster's issuer; application image and client compatibility should be checked before deployment.
+  <Feature title="CA trust handled">
+    The sidecar's CA goes into the app's system trust store paths and the usual environment variables, so curl, Python, Node.js and Go accept it.
   </Feature>
   <Feature title="Open source">
     Apache-2.0. Token exchange runs on [tokenex](https://github.com/riptideslabs/tokenex), our open-source exchange library.
   </Feature>
 </Features>
+
+## Current limits
+
+- A compromised app can still use the API access it's allowed, through the proxy. Waterwheel removes long-lived keys, not the app's permissions.
+- Intercepted hosts use HTTP/1.1, so gRPC to a bound host doesn't work yet.
+- A binding that needs a new token audience waits for a pod restart.
+- CA trust has only been tested with the demo's Alpine image, so check your app's image and HTTP clients.
+
+The [README](https://github.com/riptideslabs/waterwheel#security-model-and-current-limits) has the full security model.
 
 <p class="ww-built">Waterwheel is built by <a href="https://riptides.io">Riptides</a>.</p>
