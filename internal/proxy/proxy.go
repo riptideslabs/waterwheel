@@ -35,10 +35,14 @@ type Proxy struct {
 	// NewTokens starts the credentials of a binding for the pod's SPIFFE ID
 	// (empty with service account tokens); it runs until ctx ends.
 	NewTokens func(ctx context.Context, spiffeID string, b bindings.Binding) Tokens
+	// Report, if set, tells the controller about changes, for events on the
+	// pod. It must not block.
+	Report func(bindings.Report)
 
 	mu       sync.RWMutex
 	identity string
 	spiffeID string
+	reason   string
 	routes   []*route
 	ready    chan struct{}
 	once     sync.Once
@@ -71,11 +75,15 @@ func New(ca *CA, subjects Subjects) *Proxy {
 		subject, err := subjects(spiffeID, b)
 		if err != nil {
 			log.Warn("no subject token", "err", err)
+			p.report(bindings.Report{
+				Binding: b.Namespace + "/" + b.Name, Reason: bindings.ReasonNoSubjectToken,
+				Message: fmt.Sprintf("no subject token to exchange with %s: %s", ProviderName(b), describe(err)),
+			})
 
 			return failed{err}
 		}
 
-		c := newCredentials(b, subject, log)
+		c := newCredentials(b, subject, log, p.report)
 
 		go c.run(ctx)
 
@@ -83,6 +91,12 @@ func New(ca *CA, subjects Subjects) *Proxy {
 	}
 
 	return p
+}
+
+func (p *Proxy) report(r bindings.Report) {
+	if p.Report != nil {
+		p.Report(r)
+	}
 }
 
 // SPIFFEID is the pod's SPIFFE ID from the latest snapshot, with SPIFFE sources.
@@ -143,11 +157,18 @@ func (p *Proxy) Update(ctx context.Context, snap bindings.Snapshot) {
 
 	p.identity, p.spiffeID, p.routes = cmp.Or(snap.SPIFFEID, snap.Identity), snap.SPIFFEID, routes
 
+	newReason := snap.Reason != p.reason
+	p.reason = snap.Reason
+
 	if p.ready == nil {
 		p.ready = make(chan struct{})
 	}
 
 	p.mu.Unlock()
+
+	if newReason && snap.Reason != "" {
+		p.report(bindings.Report{Reason: bindings.ReasonNoWorkloadIdentity, Message: snap.Reason})
+	}
 
 	p.once.Do(func() { close(p.ready) })
 

@@ -6,12 +6,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.riptides.io/waterwheel/api/v1alpha1"
@@ -23,10 +29,12 @@ import (
 // token, which re-checks that its pod still exists.
 const MaxWatch = 10 * time.Minute
 
-// API serves each proxy its bindings:
+// API serves each proxy its bindings, and records what it reports as events
+// on its pod:
 //
-//	GET /v1/bindings             one snapshot
-//	GET /v1/bindings?watch=true  a snapshot per line, again on every change
+//	GET  /v1/bindings             one snapshot
+//	GET  /v1/bindings?watch=true  a snapshot per line, again on every change
+//	POST /v1/reports              a bindings.Report
 //
 // Requests carry the pod's projected token as a bearer token.
 type API struct {
@@ -37,16 +45,27 @@ type API struct {
 	// TrustDomain is set with SPIFFE sources: the pod's workload ID comes
 	// from the WorkloadIdentities, rather than its service account.
 	TrustDomain string
+	// Recorder gets the events of reports.
+	Recorder events.EventRecorder
+}
+
+// reportEvents are the reasons a proxy may report, with their event's type and action.
+var reportEvents = map[string]struct{ typ, action string }{
+	bindings.ReasonCredentialIssued:    {corev1.EventTypeNormal, actionExchangeToken},
+	bindings.ReasonTokenExchangeFailed: {corev1.EventTypeWarning, actionExchangeToken},
+	bindings.ReasonNoSubjectToken:      {corev1.EventTypeWarning, actionExchangeToken},
+	bindings.ReasonNoWorkloadIdentity:  {corev1.EventTypeWarning, actionResolveIdentity},
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/bindings" {
+	method := map[string]string{"/v1/bindings": http.MethodGet, "/v1/reports": http.MethodPost}[r.URL.Path]
+	if method == "" {
 		http.NotFound(w, r)
 
 		return
 	}
 
-	if r.Method != http.MethodGet {
+	if r.Method != method {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 
 		return
@@ -63,6 +82,12 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Info("bindings request refused", "remote", r.RemoteAddr, "reason", err)
 		http.Error(w, "forbidden", http.StatusForbidden)
+
+		return
+	}
+
+	if method == http.MethodPost {
+		a.report(w, r, caller)
 
 		return
 	}
@@ -118,6 +143,65 @@ func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, erro
 	snap.SPIFFEID = identity.SPIFFEID(a.TrustDomain, id)
 
 	return snap, err
+}
+
+// report records an event on the caller's pod, about one of its bindings or
+// about its identity. Only the controller decides the event's type, and why a
+// pod has no identity.
+func (a *API) report(w http.ResponseWriter, r *http.Request, c Caller) {
+	var rep bindings.Report
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&rep); err != nil {
+		http.Error(w, "bad report", http.StatusBadRequest)
+
+		return
+	}
+
+	ev, ok := reportEvents[rep.Reason]
+	if !ok {
+		http.Error(w, "unknown reason", http.StatusBadRequest)
+
+		return
+	}
+
+	snap, err := a.bindingsOf(r.Context(), c)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	note := rep.Message
+
+	var related runtime.Object
+
+	if rep.Reason == bindings.ReasonNoWorkloadIdentity {
+		if snap.Reason == "" {
+			http.Error(w, "the pod has a workload identity", http.StatusConflict)
+
+			return
+		}
+
+		note = snap.Reason
+	} else {
+		ns, name, _ := strings.Cut(rep.Binding, "/")
+		if !slices.ContainsFunc(snap.Bindings, func(b bindings.Binding) bool { return b.Namespace == ns && b.Name == name }) {
+			http.Error(w, "not one of the pod's bindings", http.StatusForbidden)
+
+			return
+		}
+
+		var cb v1alpha1.CredentialBinding
+		if err := a.Reader.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: name}, &cb); err == nil {
+			related = &cb
+		}
+	}
+
+	if a.Recorder != nil {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: c.Namespace, Name: c.Pod, UID: c.PodUID}}
+		a.Recorder.Eventf(pod, related, ev.typ, rep.Reason, ev.action, "%s", truncate(note, maxNote))
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // resolve returns the caller's workload ID, or why it has none.

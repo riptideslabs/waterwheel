@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.riptides.io/waterwheel/api/v1alpha1"
@@ -67,6 +68,8 @@ type IdentityRegistrar struct {
 	TrustDomain     string
 	// ClassName is the spire-controller-manager class of the ClusterSPIFFEIDs.
 	ClassName string
+	// Recorder gets an event for each condition change.
+	Recorder events.EventRecorder
 }
 
 // Start runs the sync loop; on the leader only.
@@ -173,6 +176,7 @@ func (r *IdentityRegistrar) updateStatus(ctx context.Context, wids []v1alpha1.Wo
 	for i := range wids {
 		w := &wids[i]
 		key := types.NamespacedName{Namespace: w.Namespace, Name: w.Name}
+		before := slices.Clone(w.Status.Conditions)
 
 		changed := setCondition(w, &w.Status.Conditions, r.ready(key, w, set, failed))
 
@@ -194,8 +198,13 @@ func (r *IdentityRegistrar) updateStatus(ctx context.Context, wids []v1alpha1.Wo
 			continue
 		}
 
+		err := r.Client.Status().Update(ctx, w)
+
+		switch {
+		case err == nil:
+			recordTransitions(r.Recorder, w, actionRegister, before, w.Status.Conditions)
 		// A conflict means it changed meanwhile, and that change brings another sync.
-		if err := r.Client.Status().Update(ctx, w); err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
+		case !apierrors.IsConflict(err) && !apierrors.IsNotFound(err):
 			errs = append(errs, err)
 		}
 	}

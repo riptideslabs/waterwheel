@@ -111,6 +111,28 @@ The per-pod CA's key lives in a memory-backed volume mounted only into the
 sidecar. A sidecar restart therefore keeps the same CA, which matters because
 apps load the CA bundle once. The key disappears with the pod.
 
+**Events.** Only the controller writes Kubernetes events, since the sidecar
+has no Kubernetes API access.
+
+- On CredentialBindings and WorkloadIdentities, there's an event whenever a
+  condition's status or reason changes: a Warning unless the condition is
+  True.
+- On pods, events come from the proxy's reports to `POST /v1/reports`, which
+  takes the same token as the bindings API. The proxy reports only changes:
+  - `CredentialIssued` for its first token, and again after failures;
+  - `TokenExchangeFailed` when an exchange fails, or fails differently. A
+    first failure that may fix itself, such as an SVID SPIRE hasn't issued
+    yet, is held back for 30 seconds;
+  - `NoSubjectToken` when the pod has no token for the source's audience;
+  - `NoWorkloadIdentity` with SPIRE.
+- The controller allows only these reasons, and sets each event's type
+  itself. It accepts reports only about the pod's own bindings, and writes the
+  `NoWorkloadIdentity` message itself. `kubectl describe pod` shows the events.
+
+Events last an hour by default, and repeats get merged, so they show what is
+happening now. They aren't an audit trail. Structured audit records per
+request come later; what they cover is still open.
+
 ## API
 
 Waterwheel has its own API, `core.riptides.io/v1alpha1`, in `api/v1alpha1`. It is
@@ -446,3 +468,6 @@ This is the original plan:
    *Recommended.* A strict per-namespace mode can come later.
 4. **Open-core positioning, with an API the platform can adopt later.**
    *Recommended.*
+5. **Audit records.** One structured record per intercepted request, from the
+   proxy, collected like any other log. Still open: whether every request gets
+   one or only token issuance and refusals, and whether tunnels count.

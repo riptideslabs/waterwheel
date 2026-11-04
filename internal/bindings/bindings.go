@@ -45,6 +45,23 @@ type Binding struct {
 	Scheme string `json:"scheme"`
 }
 
+// Reasons a proxy reports.
+const (
+	ReasonCredentialIssued    = "CredentialIssued"
+	ReasonTokenExchangeFailed = "TokenExchangeFailed"
+	ReasonNoSubjectToken      = "NoSubjectToken"
+	ReasonNoWorkloadIdentity  = "NoWorkloadIdentity"
+)
+
+// Report is what a proxy tells the controller when its credentials change,
+// for an event on its pod.
+type Report struct {
+	// Binding is the binding's namespace/name; empty for NoWorkloadIdentity.
+	Binding string `json:"binding,omitempty"`
+	Reason  string `json:"reason"`
+	Message string `json:"message,omitempty"`
+}
+
 var (
 	errNoProvider      = errors.New("the source names no provider")
 	errForeignIdentity = errors.New("workloadID is outside the binding's namespace")

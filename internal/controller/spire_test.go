@@ -124,7 +124,7 @@ func snapshotOf(t *testing.T, api *controller.API) bindings.Snapshot {
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 
-	resp := get(t, srv.URL+"/v1/bindings", "good")
+	resp := get(t, srv.URL+"/v1/bindings", goodToken)
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
@@ -140,13 +140,15 @@ func snapshotOf(t *testing.T, api *controller.API) bindings.Snapshot {
 	return snap
 }
 
-func TestAPISPIRE(t *testing.T) {
-	t.Parallel()
+// twoIdentities: one WorkloadIdentity for the bot's service account, with a
+// binding, and one for its team label.
+func twoIdentities(t *testing.T) client.Client {
+	t.Helper()
 
 	b := newBinding("bot")
 	b.Spec.WorkloadID = "ns/support/bot"
 
-	c := newClient(t,
+	return newClient(t,
 		&v1alpha1.CredentialSource{
 			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: sourceName},
 			Spec:       v1alpha1.CredentialSourceSpec{Anthropic: &v1alpha1.AnthropicWIFCredentialProvider{}},
@@ -155,6 +157,12 @@ func TestAPISPIRE(t *testing.T) {
 		newWID("bot", "ns/support/bot", map[string]string{saKey: serviceAccount}),
 		newWID("by-label", "ns/support/other", map[string]string{"k8s:label:team": serviceAccount}),
 	)
+}
+
+func TestAPISPIRE(t *testing.T) {
+	t.Parallel()
+
+	c := twoIdentities(t)
 
 	api := &controller.API{
 		Auth: labeledAuth(nil), Reader: c, SystemNamespace: systemNamespace,
@@ -204,13 +212,30 @@ func TestRegistrar(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).
 		WithObjects(w, same, stale, foreign).WithStatusSubresource(&v1alpha1.WorkloadIdentity{}).Build()
 
+	rec := &recorder{}
 	r := &controller.IdentityRegistrar{
 		Client: c, Reader: c, Changes: controller.NewBroadcaster(),
-		SystemNamespace: systemNamespace, TrustDomain: trustDomain, ClassName: "spire-server-spire",
+		SystemNamespace: systemNamespace, TrustDomain: trustDomain, ClassName: "spire-server-spire", Recorder: rec,
 	}
 
 	if err := r.Sync(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+
+	recorded := reasons(rec.take())
+	slices.Sort(recorded)
+
+	if !slices.Equal(recorded, []string{"Normal Registered", "Warning SelectorsOverlap"}) {
+		t.Errorf("events %v", recorded)
+	}
+
+	// A second sync changes nothing, so it records nothing.
+	if err := r.Sync(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := reasons(rec.take()); len(got) != 0 {
+		t.Errorf("events %v without a change", got)
 	}
 
 	var list unstructured.UnstructuredList

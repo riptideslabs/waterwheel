@@ -21,7 +21,8 @@ rules:
 - apiGroups: ["core.riptides.io"]
   resources: ["workloadidentities/status", "credentialsources/status", "credentialbindings/status"]
   verbs: ["update", "patch"]
-- apiGroups: [""]
+# Events on its own objects and, for proxies' reports, on their pods.
+- apiGroups: ["", "events.k8s.io"]
   resources: ["events"]
   verbs: ["create", "patch"]
 # Bindings API: find out which pod is asking from its projected token.

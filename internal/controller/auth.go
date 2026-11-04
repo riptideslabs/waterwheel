@@ -11,6 +11,7 @@ import (
 
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.riptides.io/waterwheel/internal/bindings"
@@ -39,6 +40,7 @@ type Caller struct {
 	Namespace      string
 	ServiceAccount string
 	Pod            string
+	PodUID         types.UID
 	Labels         map[string]string
 }
 
@@ -103,7 +105,7 @@ func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller,
 		return Caller{}, errNotPod
 	}
 
-	return Caller{Namespace: ns, ServiceAccount: sa, Pod: podName, Labels: pod.Labels}, nil
+	return Caller{Namespace: ns, ServiceAccount: sa, Pod: podName, PodUID: pod.UID, Labels: pod.Labels}, nil
 }
 
 func single(v authnv1.ExtraValue) string {

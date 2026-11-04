@@ -3,6 +3,7 @@
 package controller_test
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -59,7 +60,8 @@ func TestBindingStatus(t *testing.T) {
 			pod("bot-new", anthropicAudience),
 		).Build()
 
-	r := &controller.BindingStatus{Client: c, Pods: c, SystemNamespace: systemNamespace, ServiceAccountIDsOnly: true}
+	rec := &recorder{}
+	r := &controller.BindingStatus{Client: c, Pods: c, SystemNamespace: systemNamespace, ServiceAccountIDsOnly: true, Recorder: rec}
 	key := client.ObjectKey{Namespace: namespace, Name: "bot-anthropic"}
 
 	conditions := func() (*metav1.Condition, *metav1.Condition) {
@@ -92,6 +94,17 @@ func TestBindingStatus(t *testing.T) {
 		t.Fatalf("PodsUpToDate = %+v; want RestartRequired for bot-old", pods)
 	}
 
+	if got := reasons(rec.take()); !slices.Equal(got, []string{"Normal Resolved", "Warning RestartRequired"}) {
+		t.Errorf("events %v", got)
+	}
+
+	// Nothing changed, so no events.
+	conditions()
+
+	if got := reasons(rec.take()); len(got) != 0 {
+		t.Errorf("events %v without a change", got)
+	}
+
 	// The old pod restarts and gets the audience.
 	if err := c.Delete(t.Context(), pod("bot-old", "")); err != nil {
 		t.Fatal(err)
@@ -99,5 +112,9 @@ func TestBindingStatus(t *testing.T) {
 
 	if _, pods := conditions(); pods.Status != metav1.ConditionTrue {
 		t.Errorf("PodsUpToDate = %+v after the restart", pods)
+	}
+
+	if got := reasons(rec.take()); !slices.Equal(got, []string{"Normal UpToDate"}) {
+		t.Errorf("events %v after the restart", got)
 	}
 }
