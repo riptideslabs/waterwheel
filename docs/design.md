@@ -105,7 +105,8 @@ tokens stay in the proxy's memory.
   `Authorization: Bearer <token>`), strips the provider's key headers
   (`X-Api-Key` for Anthropic) and forwards the request.
 - Otherwise it passes the connection through as a plain TCP tunnel and logs it.
-- Only HTTP/1.1 is intercepted at first.
+- Only HTTP/1.1 is intercepted at first, WebSocket upgrades included. The
+  proxy offers only `http/1.1` to the app, so gRPC to a bound host fails.
 
 The per-pod CA's key lives in a memory-backed volume mounted only into the
 sidecar. A sidecar restart therefore keeps the same CA, which matters because
