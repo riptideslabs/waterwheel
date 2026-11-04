@@ -50,6 +50,7 @@ func echo(w http.ResponseWriter, r *http.Request) {
 		"authorization": r.Header.Get("Authorization"),
 		"x-api-key":     r.Header.Get("X-Api-Key"),
 		"path":          r.URL.Path,
+		"proto":         r.Proto,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -80,12 +81,15 @@ type setup struct {
 }
 
 // newSetup runs a proxy with two upstream servers: bound gets the binding's
-// token, other is passed through.
+// token, other is passed through. Like the providers' APIs, bound offers
+// HTTP/2, which the proxy prefers.
 func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
 	t.Helper()
 
 	s := &setup{}
-	s.bound = httptest.NewTLSServer(http.HandlerFunc(echo))
+	s.bound = httptest.NewUnstartedServer(http.HandlerFunc(echo))
+	s.bound.EnableHTTP2 = true
+	s.bound.StartTLS()
 	s.other = httptest.NewTLSServer(http.HandlerFunc(echo))
 	t.Cleanup(s.bound.Close)
 	t.Cleanup(s.other.Close)
@@ -180,6 +184,10 @@ func TestInterceptAddsToken(t *testing.T) {
 		t.Errorf("upstream saw %v; want the binding's token, no key", got)
 	}
 
+	if got["proto"] != "HTTP/2.0" {
+		t.Errorf("upstream request over %s; want HTTP/2", got["proto"])
+	}
+
 	// An unchanged snapshot keeps the binding's credentials running.
 	s.proxy.Update(t.Context(), snapshot(t, s.bound.URL))
 
@@ -188,6 +196,8 @@ func TestInterceptAddsToken(t *testing.T) {
 	}
 }
 
+// TestWebSocket upgrades over HTTP/1.1 even though bound offers HTTP/2: Go's
+// transport doesn't offer h2 for a WebSocket upgrade.
 func TestWebSocket(t *testing.T) {
 	t.Parallel()
 
