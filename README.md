@@ -58,8 +58,11 @@ service account share its bindings unless SPIRE selectors distinguish them.
 
 Today, intercepted destinations use HTTP/1.1; gRPC to a bound host is not
 supported. A binding that needs a new token audience requires a pod restart.
-CA bundle mounting has been exercised with the demo's Alpine image, not every
-application image. See [the design](docs/design.md) for details and
+Java apps don't pick up the sidecar's CA yet; `make e2e-trust` checks the CA
+bundle in Debian, Ubuntu, Fedora, UBI, Amazon Linux, SUSE and distroless images.
+A container that already sets `SSL_CERT_FILE` (or a similar variable) or mounts
+its own CA bundle keeps it, so it won't trust the proxy.
+See [the design](docs/design.md) for details and
 [SECURITY.md](SECURITY.md) for private vulnerability reports.
 
 ## Development

@@ -196,7 +196,8 @@ Waterwheel leaves `automountServiceAccountToken` alone. Set it to `false` if the
 - A compromised app can still use the API access it's allowed, through the proxy. Waterwheel removes long-lived keys, not the app's permissions.
 - Intercepted hosts use HTTP/1.1, so gRPC to a bound host doesn't work yet.
 - A binding that needs a new token audience waits for a pod restart.
-- CA trust has only been tested with the demo's Alpine image, so check your app's image and HTTP clients.
+- Java apps don't pick up the sidecar's CA yet.
+- A container that already sets `SSL_CERT_FILE` (or a similar variable) or mounts its own CA bundle keeps it, so it won't trust the proxy.
 
 The [README](https://github.com/riptideslabs/waterwheel#security-model-and-current-limits) has the full security model.
 
