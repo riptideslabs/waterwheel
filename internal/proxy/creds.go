@@ -126,16 +126,21 @@ func (c *credentials) denied() bool {
 // "Error 403" and "response code 403", and Azure's "RESPONSE 400".
 var refusal = regexp.MustCompile(`(?i)\b(?:status|error|response(?: code)?) (4\d\d)\b`)
 
-// denied: the token endpoint refused the exchange. A timeout or a rate limit
-// isn't a refusal.
+// transient are the OAuth errors (RFC 6749) for an outage, which some token
+// endpoints return with a 400.
+var transient = regexp.MustCompile(`\b(?:temporarily_unavailable|server_error)\b`)
+
+// denied: the token endpoint refused the exchange. A timeout, a rate limit or
+// an outage isn't a refusal.
 func denied(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	m := refusal.FindStringSubmatch(err.Error())
+	msg := err.Error()
+	m := refusal.FindStringSubmatch(msg)
 
-	return m != nil && m[1] != "408" && m[1] != "429"
+	return m != nil && m[1] != "408" && m[1] != "429" && !transient.MatchString(msg)
 }
 
 func (c *credentials) set(access string, expiry time.Time) {

@@ -90,15 +90,17 @@ func TestDenied(t *testing.T) {
 	t.Parallel()
 
 	for msg, want := range map[string]bool{
-		"could not exchange token: token endpoint returned status 404: 404 page not found":  true,
-		"could not exchange token: token endpoint error 401: invalid_grant — invalid aud":   true,
-		"failed to exchange ID token for STS token: googleapi: Error 400: Invalid value":    true,
-		"googleapi: got HTTP response code 403 with body: denied":                           true,
-		"ClientAssertionCredential authentication failed\nRESPONSE 400: 400 Bad Request":    true,
-		"could not exchange token: token endpoint returned status 429: slow down":           false,
-		"could not exchange token: token endpoint returned status 503: service unavailable": false,
-		"dial tcp 10.96.0.10:443: i/o timeout":                                              false,
-		"open /run/waterwheel-proxy/tokens/aud.token: no such file or directory":            false,
+		"could not exchange token: token endpoint returned status 404: 404 page not found":   true,
+		"could not exchange token: token endpoint error 401: invalid_grant — invalid aud":    true,
+		"failed to exchange ID token for STS token: googleapi: Error 400: Invalid value":     true,
+		"googleapi: got HTTP response code 403 with body: denied":                            true,
+		"ClientAssertionCredential authentication failed\nRESPONSE 400: 400 Bad Request":     true,
+		"could not exchange token: token endpoint returned status 429: slow down":            false,
+		"could not exchange token: token endpoint error 400: temporarily_unavailable — busy": false,
+		"could not exchange token: token endpoint error 400: server_error — try again":       false,
+		"could not exchange token: token endpoint returned status 503: service unavailable":  false,
+		"dial tcp 10.96.0.10:443: i/o timeout":                                               false,
+		"open /run/waterwheel-proxy/tokens/aud.token: no such file or directory":             false,
 	} {
 		if got := denied(errors.New(msg)); got != want { //nolint:err113 // test errors
 			t.Errorf("denied(%q) = %v; want %v", msg, got, want)
