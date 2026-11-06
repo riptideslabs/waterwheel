@@ -7,7 +7,7 @@ BINS := waterwheel-agent waterwheel-controller waterwheel-proxy
 CHART_VALUES := --set trustDomain=waterwheel.test --set issuer=https://oidc.waterwheel.test
 
 .PHONY: help generate check-generate build test vet lint chart shellcheck check \
-	vm cluster images deploy dev api-check e2e e2e-setup e2e-reset demo down vm-delete site site-build
+	vm cluster images deploy dev api-check e2e e2e-setup e2e-reset e2e-trust demo down vm-delete site site-build
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -79,6 +79,8 @@ e2e-setup: ## Fake provider, test images, DNS, and Waterwheel with the e2e CA
 
 e2e-reset: ## Back to the state before step 1
 	@test/e2e/reset.sh
+e2e-trust: ## CA trust in common base images, after make e2e (E2E_IDENTITY=serviceAccountToken)
+	@test/e2e/trust.sh
 
 demo: ## The five steps, waiting for a key before each command
 	@PAUSE=1 test/e2e/steps/all.sh
