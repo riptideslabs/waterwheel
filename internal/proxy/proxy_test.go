@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -277,5 +278,56 @@ func TestNewSPIFFEIDRestartsCredentials(t *testing.T) {
 
 	if got := s.proxy.SPIFFEID(); got != "spiffe://waterwheel.test/b" {
 		t.Errorf("SPIFFEID() = %q", got)
+	}
+}
+
+// TestReports: the proxy reports a missing subject token once, and each new
+// reason the pod has no identity.
+func TestReports(t *testing.T) {
+	t.Parallel()
+
+	ca, err := proxy.LoadOrCreateCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No projected tokens at all.
+	p := proxy.New(ca, proxy.TokenFiles(t.TempDir()))
+
+	var got []string
+
+	p.Report = func(r bindings.Report) { got = append(got, r.Reason) }
+
+	snap := snapshot(t, "https://api.anthropic.com:443")
+	ambiguous := bindings.Snapshot{Reason: "two WorkloadIdentities match"}
+	for _, s := range []bindings.Snapshot{snap, snap, ambiguous, ambiguous, {Reason: "none matches"}} {
+		p.Update(t.Context(), s)
+	}
+
+	want := []string{bindings.ReasonNoSubjectToken, bindings.ReasonNoWorkloadIdentity, bindings.ReasonNoWorkloadIdentity}
+	if !slices.Equal(got, want) {
+		t.Errorf("reports %v; want %v", got, want)
+	}
+}
+
+func TestReporterKeepsOrder(t *testing.T) {
+	t.Parallel()
+
+	sent := make(chan string, 3)
+	r := proxy.NewReporter(t.Context(), func(_ context.Context, rep bindings.Report) error {
+		sent <- rep.Reason
+
+		return nil
+	})
+
+	reasons := []string{bindings.ReasonCredentialIssued, bindings.ReasonTokenExchangeFailed, bindings.ReasonCredentialIssued}
+	for _, reason := range reasons {
+		r.Report(bindings.Report{Reason: reason})
+	}
+
+	for _, want := range reasons {
+		if got := <-sent; got != want {
+			t.Fatalf("sent %s; want %s", got, want)
+		}
 	}
 }

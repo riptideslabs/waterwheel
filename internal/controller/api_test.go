@@ -28,6 +28,7 @@ const (
 	identity        = "ns/support/sa/bot"
 	sourceName      = "anthropic"
 	systemNamespace = "waterwheel-system"
+	goodToken       = "good"
 )
 
 var errBadToken = errors.New("bad token")
@@ -35,11 +36,11 @@ var errBadToken = errors.New("bad token")
 type fakeAuth struct{}
 
 func (fakeAuth) Authenticate(_ context.Context, token string) (controller.Caller, error) {
-	if token != "good" {
+	if token != goodToken {
 		return controller.Caller{}, errBadToken
 	}
 
-	return controller.Caller{Namespace: namespace, ServiceAccount: serviceAccount, Pod: podName}, nil
+	return controller.Caller{Namespace: namespace, ServiceAccount: serviceAccount, Pod: podName, PodUID: podUID}, nil
 }
 
 func TestAPI(t *testing.T) {
@@ -56,7 +57,7 @@ func TestAPI(t *testing.T) {
 	srv := httptest.NewServer(&controller.API{Auth: fakeAuth{}, Reader: c, SystemNamespace: systemNamespace, Changes: changes})
 	t.Cleanup(srv.Close)
 
-	for token, want := range map[string]int{"": http.StatusUnauthorized, "bad": http.StatusForbidden, "good": http.StatusOK} {
+	for token, want := range map[string]int{"": http.StatusUnauthorized, "bad": http.StatusForbidden, goodToken: http.StatusOK} {
 		resp := get(t, srv.URL+"/v1/bindings", token)
 		_ = resp.Body.Close()
 
@@ -65,7 +66,7 @@ func TestAPI(t *testing.T) {
 		}
 	}
 
-	resp := get(t, srv.URL+"/v1/bindings?watch=true", "good")
+	resp := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	lines := bufio.NewScanner(resp.Body)

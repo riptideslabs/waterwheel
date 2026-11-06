@@ -172,11 +172,14 @@ func run(cfg config) error {
 	}}
 	webhookCA := &controller.WebhookCA{Client: direct, Name: cfg.webhookConfig, CAPEM: serving.CAPEM}
 
+	recorder := mgr.GetEventRecorder("waterwheel-controller")
+
 	api := &controller.API{
 		Auth:            &controller.TokenReviewer{Client: direct, Pods: mgr.GetAPIReader()},
 		Reader:          mgr.GetClient(),
 		SystemNamespace: cfg.namespace,
 		Changes:         changes,
+		Recorder:        recorder,
 	}
 
 	if spire {
@@ -196,6 +199,7 @@ func run(cfg config) error {
 		SystemNamespace:       cfg.namespace,
 		ServiceAccountIDsOnly: !spire,
 		WorkloadIdentities:    spire,
+		Recorder:              recorder,
 	}
 
 	if err := errors.Join(
@@ -217,6 +221,7 @@ func run(cfg config) error {
 			SystemNamespace: cfg.namespace,
 			TrustDomain:     cfg.trustDomain,
 			ClassName:       cfg.spireClassName,
+			Recorder:        recorder,
 		}
 
 		if err := mgr.Add(registrar); err != nil {

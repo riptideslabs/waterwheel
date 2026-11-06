@@ -75,6 +75,19 @@ expect() {
   grep -qF -- "$2" <<<"$out" || fail "expected \"$2\" in the output above"
 }
 
+# Like expect, retrying for up to 10 seconds, for what lands asynchronously.
+expect_eventually() {
+  local out
+  show "$1"
+  for _ in $(seq 20); do
+    out=$(eval "$1" 2>&1) || true
+    grep -qF -- "$2" <<<"$out" && break
+    sleep 0.5
+  done
+  printf '%s\n\n' "$out"
+  grep -qF -- "$2" <<<"$out" || fail "expected \"$2\" in the output above"
+}
+
 # Like run, and the output must not match the extended regexp $2.
 expect_none() {
   local out

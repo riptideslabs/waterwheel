@@ -130,6 +130,8 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 		return err
 	}
 
+	p.Report = proxy.NewReporter(ctx, client.Report).Report
+
 	go client.Watch(ctx, func(snap bindings.Snapshot) { p.Update(ctx, snap) })
 
 	// The startup probe gives the sidecar 30 seconds to listen.

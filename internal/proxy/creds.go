@@ -5,7 +5,9 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,10 @@ var (
 	errNoToken         = errors.New("no valid token")
 )
 
+// reportGrace holds back the report of a first failure that may fix itself:
+// SPIRE issues a new pod's SVIDs a few seconds late.
+const reportGrace = 30 * time.Second
+
 // Tokens is what a route needs from its credentials: a valid access token.
 type Tokens interface {
 	Get(ctx context.Context) (string, error)
@@ -30,25 +36,33 @@ type Tokens interface {
 // credentials keeps a current access token for one binding. tokenex refreshes
 // it before expiry; when tokenex reports an error (its channel then closes) it
 // backs off and starts over, or retries right away when a request is waiting.
-// Ported from the KCD demo's creds.go.
+// It reports when it first gets a token, starts failing, fails differently,
+// or recovers. Ported from the KCD demo's creds.go.
 type credentials struct {
 	binding bindings.Binding
 	subject token.IdentityTokenProvider
 	log     *slog.Logger
+	report  func(bindings.Report)
+	started time.Time
 
-	mu      sync.Mutex
-	access  string
-	expiry  time.Time
-	lastErr error
-	changed chan struct{} // closed and replaced on every result
-	kick    chan struct{}
+	mu       sync.Mutex
+	access   string
+	expiry   time.Time
+	lastErr  error
+	reported string        // the last report's reason and, for a failure, its error
+	changed  chan struct{} // closed and replaced on every result
+	kick     chan struct{}
 }
 
-func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger) *credentials {
+func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
+	report func(bindings.Report),
+) *credentials {
 	return &credentials{
 		binding: b,
 		subject: subject,
 		log:     log,
+		report:  report,
+		started: time.Now(),
 		changed: make(chan struct{}),
 		kick:    make(chan struct{}, 1),
 	}
@@ -104,7 +118,29 @@ func (c *credentials) denied() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.lastErr != nil && strings.Contains(c.lastErr.Error(), "status 4")
+	return denied(c.lastErr)
+}
+
+// refusal finds a 4xx status in an exchange error: tokenex's "token endpoint
+// returned status 401" and "token endpoint error 400: invalid_grant", Google's
+// "Error 403" and "response code 403", and Azure's "RESPONSE 400".
+var refusal = regexp.MustCompile(`(?i)\b(?:status|error|response(?: code)?) (4\d\d)\b`)
+
+// transient are the OAuth errors (RFC 6749) for an outage, which some token
+// endpoints return with a 400.
+var transient = regexp.MustCompile(`\b(?:temporarily_unavailable|server_error)\b`)
+
+// denied: the token endpoint refused the exchange. A timeout, a rate limit or
+// an outage isn't a refusal.
+func denied(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	m := refusal.FindStringSubmatch(msg)
+
+	return m != nil && m[1] != "408" && m[1] != "429" && !transient.MatchString(msg)
 }
 
 func (c *credentials) set(access string, expiry time.Time) {
@@ -116,6 +152,12 @@ func (c *credentials) set(access string, expiry time.Time) {
 	c.changed = make(chan struct{})
 
 	c.log.Info("got an access token", "token", redact(access), "expiresIn", until(expiry))
+
+	if c.reported != bindings.ReasonCredentialIssued {
+		c.reported = bindings.ReasonCredentialIssued
+		c.send(bindings.ReasonCredentialIssued,
+			fmt.Sprintf("%s issued a token, valid for %s", ProviderName(c.binding), until(expiry)))
+	}
 }
 
 func (c *credentials) fail(err error) {
@@ -126,7 +168,24 @@ func (c *credentials) fail(err error) {
 	close(c.changed)
 	c.changed = make(chan struct{})
 
-	c.log.Warn("token exchange failed", "err", describe(err))
+	msg := describe(err)
+	c.log.Warn("token exchange failed", "err", msg)
+
+	if c.reported == "" && !denied(err) && time.Since(c.started) < reportGrace {
+		return
+	}
+
+	if key := bindings.ReasonTokenExchangeFailed + ": " + msg; c.reported != key {
+		c.reported = key
+		c.send(bindings.ReasonTokenExchangeFailed,
+			fmt.Sprintf("token exchange with %s failed: %s", ProviderName(c.binding), msg))
+	}
+}
+
+func (c *credentials) send(reason, msg string) {
+	if c.report != nil {
+		c.report(bindings.Report{Binding: c.binding.Namespace + "/" + c.binding.Name, Reason: reason, Message: msg})
+	}
 }
 
 func (c *credentials) valid() (string, bool) {
