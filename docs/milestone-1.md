@@ -177,5 +177,5 @@ Not in M1:
   after the sidecar, so the app never starts without its bindings.
 - **Some images won't take the bundle mount.** A `subPath` file mount over a
   symlinked bundle (Alpine's `/etc/ssl/cert.pem`, RHEL's `ca-bundle.crt`) has
-  to be tested on each base image. M1 covers curl (Alpine). Debian, UBI and
-  distroless go into an e2e matrix in M2.
+  to be tested on each base image. M1 covers curl (Alpine); `make e2e-trust`
+  adds Debian, Ubuntu, Fedora, UBI, Amazon Linux, SUSE and distroless.

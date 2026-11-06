@@ -36,6 +36,13 @@ jobs:
           E2E_IDENTITY: ${{ matrix.identity }}
         run: make e2e
 
+      # CA trust doesn't depend on the identity source, so once is enough.
+      - name: make e2e-trust
+        if: matrix.identity == 'serviceAccountToken'
+        env:
+          LIMA_VM: ""
+        run: make e2e-trust
+
       - name: Cluster state
         if: failure()
         env:
@@ -44,6 +51,7 @@ jobs:
           kubectl get pods -A
           kubectl -n waterwheel-system logs deploy/waterwheel-controller --tail=100 || true
           kubectl -n support logs deploy/support-bot -c waterwheel-proxy --tail=100 || true
+          kubectl -n support logs -l app=trust --all-containers --prefix --tail=50 || true
           kubectl -n waterwheel-e2e logs deploy/fake-provider --tail=100 || true
           kubectl get workloadidentities,credentialbindings -A -o wide || true
           kubectl get clusterspiffeids -o name || true

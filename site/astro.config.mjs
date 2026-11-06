@@ -13,7 +13,7 @@ export default defineConfig({
         starlight({
             title: "Waterwheel",
             description:
-                "Waterwheel exchanges a pod's Kubernetes service account token for short-lived API tokens, so pods call Anthropic, OpenAI and other APIs without holding a key.",
+                "Waterwheel exchanges a pod's Kubernetes service account token for short-lived API tokens, so apps call Anthropic, OpenAI and other APIs without long-lived API keys.",
             logo: { src: "./src/assets/waterwheel.svg" },
             favicon: "/favicon.svg",
             customCss: ["@fontsource-variable/inter", "./src/styles/custom.css"],

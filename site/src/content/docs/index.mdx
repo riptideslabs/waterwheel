@@ -1,14 +1,14 @@
 ---
 title: Workload identity for Kubernetes
-description: Waterwheel exchanges a pod's Kubernetes service account token for short-lived API tokens, so pods call Anthropic, OpenAI and other APIs without holding a key.
+description: Waterwheel exchanges a pod's Kubernetes service account token for short-lived API tokens, so apps call Anthropic, OpenAI and other APIs without long-lived API keys.
 template: splash
 editUrl: false
 hero:
   title: Waterwheel
-  tagline: Workload identity for Kubernetes. Your pods call AI and cloud APIs with short-lived tokens, and never hold a key.
+  tagline: Workload identity for Kubernetes. Your pods call AI and cloud APIs with short-lived tokens, without long-lived API keys.
   actions:
-    - text: How it works
-      link: "#how-it-works"
+    - text: Try it locally
+      link: "#try-it-locally"
       icon: down-arrow
     - text: Read the design
       link: https://github.com/riptideslabs/waterwheel/blob/main/docs/design.md
@@ -36,9 +36,21 @@ Anthropic, OpenAI and the cloud providers now offer workload identity federation
 
 We presented the idea at KCD Budapest on 30 October 2026. In the live demo, a pod with no key called Claude: SPIRE gave it an identity, [tokenex](https://github.com/riptideslabs/tokenex) exchanged that for a short-lived Anthropic token, and an egress sidecar added the token on the way out.
 
-Waterwheel turns that demo into a product. By default the pod's service account token takes SPIRE's place, so there's nothing extra to install. SPIRE is still an option, and the demo's five steps run as an automated test with both.
+Waterwheel turns that demo into a product. By default the pod's service account token takes SPIRE's place, so SPIRE is not required. SPIRE is still an option, and the demo's five steps run as an automated test with both.
 
 <Talk />
+
+## Try it locally
+
+Waterwheel is an **early preview**, with no tagged release yet. The local demo uses a fake provider, so you need no Anthropic or OpenAI account. Install Go 1.26 or newer, Docker, kind, kubectl, Helm and jq, and start Docker. Then run:
+
+```bash
+git clone https://github.com/riptideslabs/waterwheel.git
+cd waterwheel
+LIMA_VM= make e2e
+```
+
+This creates a kind cluster named `waterwheel`. The five steps check that a request fails without the proxy, succeeds with it, and that the demo app has no mounted service account token. The demo sets `automountServiceAccountToken: false`. Look for `all five steps passed (provider: fake, identity: serviceAccountToken)`. Use `LIMA_VM= make down` to remove the cluster. See the [README](https://github.com/riptideslabs/waterwheel#quickstart-run-the-five-step-demo) for the SPIRE variant and current limits.
 
 ## How it works
 
@@ -50,7 +62,7 @@ The pod's identity comes from its Kubernetes service account token, the default,
 <TabItem label="Service account tokens">
 
 <Architecture>
-  Waterwheel's components have teal outlines. The app never sees a key or a token: the service account tokens are mounted only into the sidecar, and the Anthropic token only exists in its memory.
+  Waterwheel's components have teal outlines. Its projected identity tokens mount only into the sidecar, and the Anthropic token stays in sidecar memory. The demo also disables Kubernetes' default service account token mount in the app.
 </Architecture>
 
 <Steps>
@@ -73,7 +85,7 @@ The pod's identity comes from its Kubernetes service account token, the default,
 <TabItem label="SPIRE">
 
 <Architecture spire>
-  Waterwheel's components have teal outlines. The app never sees a key, a token or the SPIRE socket: the Workload API is mounted only into the sidecar, and the tokens only exist in its memory.
+  Waterwheel's components have teal outlines. The SPIRE Workload API socket mounts only into the sidecar, and exchanged tokens stay in its memory. The demo also disables Kubernetes' default service account token mount in the app.
 </Architecture>
 
 <Steps>
@@ -154,27 +166,39 @@ spec:
 kubectl label namespace support waterwheel.riptides.io/inject=enabled
 ```
 
+Waterwheel leaves `automountServiceAccountToken` alone. Set it to `false` if the app shouldn't get Kubernetes' default service account token; the sidecar's own tokens still work, and the demo does this.
+
 ## What you get
 
 <Features>
-  <Feature title="No keys in pods">
-    The app container gets no key, no token and no socket. A shell in the pod finds nothing to steal.
+  <Feature title="No API keys in app containers">
+    The app gets no long-lived API key. Waterwheel's identity tokens and the SPIRE socket mount only into the sidecar.
   </Feature>
-  <Feature title="Nothing extra to run">
-    Kubernetes signs and rotates the identity tokens, so there's no agent on the nodes. With SPIRE, WorkloadIdentity selectors give pods that share a service account their own SPIFFE IDs.
+  <Feature title="No node agent required">
+    Kubernetes signs and rotates the identity tokens, so the default mode runs nothing on the nodes. SPIRE is optional.
   </Feature>
   <Feature title="Namespaces are the boundary">
     A binding only applies to service accounts in its own namespace. This is checked at admission and again when the controller hands out bindings.
   </Feature>
   <Feature title="Many token endpoints">
-    Anthropic, OpenAI, Google Cloud and Microsoft Entra ID (Azure) federation, and any RFC 7523 or RFC 8693 endpoint. AWS is next.
+    Anthropic, OpenAI, Google Cloud and Microsoft Entra ID (Azure) federation, RFC 7523 endpoints, and RFC 8693 endpoints that accept JSON requests. AWS is next.
   </Feature>
-  <Feature title="Trust without setup">
-    The sidecar's CA goes into the pod's system trust store and the usual environment variables, so curl, Python, Node.js and Go accept it.
+  <Feature title="CA trust handled">
+    The sidecar's CA goes into the app's system trust store paths and the usual environment variables, so curl, Python, Node.js and Go accept it.
   </Feature>
   <Feature title="Open source">
     Apache-2.0. Token exchange runs on [tokenex](https://github.com/riptideslabs/tokenex), our open-source exchange library.
   </Feature>
 </Features>
+
+## Current limits
+
+- A compromised app can still use the API access it's allowed, through the proxy. Waterwheel removes long-lived keys, not the app's permissions.
+- Intercepted hosts use HTTP/1.1, so gRPC to a bound host doesn't work yet.
+- A binding that needs a new token audience waits for a pod restart.
+- Java apps don't pick up the sidecar's CA yet.
+- A container that already sets `SSL_CERT_FILE` (or a similar variable) or mounts its own CA bundle keeps it, so it won't trust the proxy.
+
+The [README](https://github.com/riptideslabs/waterwheel#security-model-and-current-limits) has the full security model.
 
 <p class="ww-built">Waterwheel is built by <a href="https://riptides.io">Riptides</a>.</p>
