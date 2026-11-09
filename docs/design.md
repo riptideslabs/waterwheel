@@ -116,8 +116,9 @@ apps load the CA bundle once. The key disappears with the pod.
 has no Kubernetes API access.
 
 - On CredentialBindings and WorkloadIdentities, there's an event whenever a
-  condition's status or reason changes: a Warning unless the condition is
-  True.
+  condition's status or reason changes: a Warning when the condition is in
+  its bad state, which is anything but True, or True for `Shadowed`. The end
+  of shadowing is an event too.
 - On pods, events come from the proxy's reports to `POST /v1/reports`, which
   takes the same token as the bindings API. The proxy reports only changes:
   - `CredentialIssued` for its first token, and again after failures;
@@ -126,12 +127,17 @@ has no Kubernetes API access.
     yet, is held back for 30 seconds;
   - `NoSubjectToken` when the pod has no token for the source's audience;
   - `NoWorkloadIdentity` with SPIRE.
+
+  It resends a report until the controller takes it, unless a newer one about
+  the same binding replaces it. It gives up on a report the controller keeps
+  refusing.
 - The controller allows only these reasons, and sets each event's type
   itself. It accepts reports only about the pod's own bindings, and writes the
   `NoWorkloadIdentity` message itself. `kubectl describe pod` shows the events.
 
 Events last an hour by default, and repeats get merged, so they show what is
-happening now. They aren't an audit trail. Structured audit records per
+happening now. The events library merges events by reason and action,
+whatever their messages, so each action ends in a hash of its message. They aren't an audit trail. Structured audit records per
 request come later; what they cover is still open.
 
 ## API

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,6 +61,26 @@ type Report struct {
 	Binding string `json:"binding,omitempty"`
 	Reason  string `json:"reason"`
 	Message string `json:"message,omitempty"`
+}
+
+// MaxMessage is the longest note an event takes, so the longest message a
+// report needs.
+const MaxMessage = 1024
+
+// Truncate cuts s to at most MaxMessage bytes, at a rune boundary.
+func Truncate(s string) string {
+	if len(s) <= MaxMessage {
+		return s
+	}
+
+	const more = "…"
+
+	cut := MaxMessage - len(more)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut] + more
 }
 
 var (

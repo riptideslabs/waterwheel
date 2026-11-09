@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -50,6 +51,15 @@ type API struct {
 	Recorder events.EventRecorder
 	// ReportTimeout bounds how long a report may take to arrive; 10 seconds if zero.
 	ReportTimeout time.Duration
+
+	mu      sync.Mutex
+	watches map[[sha256.Size]byte]*openWatch // by token
+}
+
+// openWatch is a watch's caller, and the snapshot it sent last.
+type openWatch struct {
+	caller Caller
+	snap   bindings.Snapshot
 }
 
 // reportEvents are the reasons a proxy may report, with their event's type and action.
@@ -61,8 +71,14 @@ var reportEvents = map[string]struct{ typ, action string }{
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	method := map[string]string{"/v1/bindings": http.MethodGet, "/v1/reports": http.MethodPost}[r.URL.Path]
-	if method == "" {
+	var method string
+
+	switch r.URL.Path {
+	case "/v1/bindings":
+		method = http.MethodGet
+	case "/v1/reports":
+		method = http.MethodPost
+	default:
 		http.NotFound(w, r)
 
 		return
@@ -87,22 +103,19 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caller, err := a.Auth.Authenticate(r.Context(), token)
-	if err != nil {
-		slog.Info("bindings request refused", "remote", r.RemoteAddr, "reason", err)
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if method == http.MethodPost {
+		a.report(w, r, token)
 
 		return
 	}
 
-	if method == http.MethodPost {
-		a.report(w, r, caller)
-
+	caller, ok := a.authenticate(w, r, token)
+	if !ok {
 		return
 	}
 
 	if r.URL.Query().Get("watch") == strTrue {
-		a.watch(w, r, caller)
+		a.watch(w, r, token, caller)
 
 		return
 	}
@@ -118,12 +131,28 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(snap)
 }
 
+func (a *API) authenticate(w http.ResponseWriter, r *http.Request, token string) (Caller, bool) {
+	caller, err := a.Auth.Authenticate(r.Context(), token)
+	if err != nil {
+		slog.Info("bindings request refused", "remote", r.RemoteAddr, "reason", err)
+		http.Error(w, "forbidden", http.StatusForbidden)
+
+		return Caller{}, false
+	}
+
+	return caller, true
+}
+
 func (a *API) snapshot(ctx context.Context, c Caller) ([]byte, error) {
 	snap, err := a.bindingsOf(ctx, c)
 	if err != nil {
 		return nil, err
 	}
 
+	return encode(snap)
+}
+
+func encode(snap bindings.Snapshot) ([]byte, error) {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return nil, err
@@ -157,7 +186,19 @@ func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, erro
 // report records an event on the caller's pod, about one of its bindings or
 // about its identity. Only the controller decides the event's type, and why a
 // pod has no identity.
-func (a *API) report(w http.ResponseWriter, r *http.Request, c Caller) {
+//
+// A proxy reports about what its watch sent it. A report with the token of an
+// open watch takes that watch's caller and snapshot, rather than reviewing the
+// token and resolving the pod's bindings again.
+func (a *API) report(w http.ResponseWriter, r *http.Request, token string) {
+	c, snap, watched := a.watched(token)
+	if !watched {
+		var ok bool
+		if c, ok = a.authenticate(w, r, token); !ok {
+			return
+		}
+	}
+
 	var rep bindings.Report
 	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&rep); err != nil {
 		http.Error(w, "bad report", http.StatusBadRequest)
@@ -172,11 +213,13 @@ func (a *API) report(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 
-	snap, err := a.bindingsOf(r.Context(), c)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if !watched {
+		var err error
+		if snap, err = a.bindingsOf(r.Context(), c); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 
-		return
+			return
+		}
 	}
 
 	note := rep.Message
@@ -207,7 +250,7 @@ func (a *API) report(w http.ResponseWriter, r *http.Request, c Caller) {
 
 	if a.Recorder != nil {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: c.Namespace, Name: c.Pod, UID: c.PodUID}}
-		a.Recorder.Eventf(pod, related, ev.typ, rep.Reason, ev.action, "%s", truncate(note, maxNote))
+		eventf(a.Recorder, pod, related, ev.typ, rep.Reason, ev.action, note)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -223,7 +266,19 @@ func resolve(set *identity.Set, c Caller) (string, string) {
 	return id, ""
 }
 
-func (a *API) watch(w http.ResponseWriter, r *http.Request, c Caller) {
+// watched returns the caller and latest snapshot of the open watch with token.
+func (a *API) watched(token string) (Caller, bindings.Snapshot, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if o, ok := a.watches[sha256.Sum256([]byte(token))]; ok {
+		return o.caller, o.snap, true
+	}
+
+	return Caller{}, bindings.Snapshot{}, false
+}
+
+func (a *API) watch(w http.ResponseWriter, r *http.Request, token string, c Caller) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -236,27 +291,55 @@ func (a *API) watch(w http.ResponseWriter, r *http.Request, c Caller) {
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 
+	key := sha256.Sum256([]byte(token))
+	open := &openWatch{caller: c}
+
+	defer func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		if a.watches[key] == open {
+			delete(a.watches, key)
+		}
+	}()
+
 	var last []byte
 
 	for {
 		// Take the channel before reading, so a change during the read isn't missed.
 		changed := a.Changes.Changed()
 
-		snap, err := a.snapshot(ctx, c)
+		snap, err := a.bindingsOf(ctx, c)
+
+		var line []byte
+		if err == nil {
+			line, err = encode(snap)
+		}
+
 		if err != nil {
 			slog.Error("bindings snapshot", "pod", c.Namespace+"/"+c.Pod, "err", err)
 
 			return
 		}
 
-		if !bytes.Equal(snap, last) {
-			if _, err := w.Write(snap); err != nil {
+		// Before it's sent, so that reports about it find it.
+		a.mu.Lock()
+		open.snap = snap
+		if a.watches == nil {
+			a.watches = map[[sha256.Size]byte]*openWatch{}
+		}
+
+		a.watches[key] = open
+		a.mu.Unlock()
+
+		if !bytes.Equal(line, last) {
+			if _, err := w.Write(line); err != nil {
 				return
 			}
 
 			flusher.Flush()
 
-			last = snap
+			last = line
 		}
 
 		select {

@@ -5,6 +5,7 @@ package controller_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -153,12 +155,88 @@ func TestReports(t *testing.T) {
 		t.Errorf("related %+v; want the binding", events[0].related)
 	}
 
-	if events[0].note != issued || events[0].action != "ExchangeToken" {
+	if events[0].note != issued || !strings.HasPrefix(events[0].action, "ExchangeToken-") {
 		t.Errorf("note %q, action %q", events[0].note, events[0].action)
 	}
 
 	if note := events[1].note; len(note) > 1024 || !utf8.ValidString(note) {
 		t.Errorf("a long message became a %d-byte note", len(note))
+	}
+}
+
+// TestReportsMessages: the events library merges events with the same
+// reason and action, whatever their notes, so another message gets another
+// action, and the same one the same.
+func TestReportsMessages(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	srv := httptest.NewServer(&controller.API{
+		Auth: fakeAuth{}, Reader: newClient(t, anthropicSource(), newBinding("first")),
+		SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster(), Recorder: rec,
+	})
+	t.Cleanup(srv.Close)
+
+	for _, msg := range []string{"invalid_grant — AADSTS70021", "status 403: denied", "invalid_grant — AADSTS70021"} {
+		rep := bindings.Report{Binding: namespace + "/first", Reason: bindings.ReasonTokenExchangeFailed, Message: msg}
+		if got := post(t, srv.URL, goodToken, rep); got != http.StatusNoContent {
+			t.Fatalf("status %d", got)
+		}
+	}
+
+	ev := rec.take()
+	if len(ev) != 3 || ev[0].action == ev[1].action || ev[0].action != ev[2].action {
+		t.Errorf("events %+v; want the second's action to differ", ev)
+	}
+}
+
+// countingAuth counts authentications.
+type countingAuth struct {
+	fakeAuth
+
+	n atomic.Int32
+}
+
+func (c *countingAuth) Authenticate(ctx context.Context, token string) (controller.Caller, error) {
+	c.n.Add(1)
+
+	return c.fakeAuth.Authenticate(ctx, token)
+}
+
+// TestReportsOnAWatch: a report with the token of an open watch takes that
+// watch's caller and bindings, without authenticating again.
+func TestReportsOnAWatch(t *testing.T) {
+	t.Parallel()
+
+	auth := &countingAuth{}
+	srv := httptest.NewServer(&controller.API{
+		Auth: auth, Reader: newClient(t, anthropicSource(), newBinding("first")),
+		SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster(), Recorder: &recorder{},
+	})
+	t.Cleanup(srv.Close)
+
+	watch := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
+	t.Cleanup(func() { _ = watch.Body.Close() })
+	next(t, bufio.NewScanner(watch.Body))
+
+	if got := post(t, srv.URL, goodToken, bindings.Report{
+		Binding: namespace + "/first", Reason: bindings.ReasonCredentialIssued,
+	}); got != http.StatusNoContent {
+		t.Errorf("status %d", got)
+	}
+
+	if got := post(t, srv.URL, goodToken, bindings.Report{
+		Binding: "billing/payments-anthropic", Reason: bindings.ReasonCredentialIssued,
+	}); got != http.StatusForbidden {
+		t.Errorf("another pod's binding: status %d", got)
+	}
+
+	if got := post(t, srv.URL, "bad", bindings.Report{Reason: bindings.ReasonCredentialIssued}); got != http.StatusForbidden {
+		t.Errorf("bad token: status %d", got)
+	}
+
+	if n := auth.n.Load(); n != 2 {
+		t.Errorf("%d authentications; want the watch's and the bad token's", n)
 	}
 }
 
