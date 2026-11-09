@@ -76,11 +76,11 @@ func (c *credentials) run(ctx context.Context) {
 	for ctx.Err() == nil {
 		ch, err := Exchange(ctx, tokenexLog, c.binding, c.subject)
 		if err != nil {
-			c.fail(err)
+			c.fail(ctx, err)
 		} else {
 			for res := range ch {
 				if res.Err != nil {
-					c.fail(res.Err)
+					c.fail(ctx, res.Err)
 
 					break
 				}
@@ -161,13 +161,19 @@ func (c *credentials) set(access string, expiry time.Time) {
 	}
 }
 
-func (c *credentials) fail(err error) {
+// fail records an exchange's failure. When ctx is done, the route is going
+// away, as its binding changed: the failure is only its cancellation.
+func (c *credentials) fail(ctx context.Context, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.lastErr = err
 	close(c.changed)
 	c.changed = make(chan struct{})
+
+	if ctx.Err() != nil {
+		return
+	}
 
 	msg := describe(err)
 	c.log.Warn("token exchange failed", "err", msg)
@@ -245,9 +251,8 @@ func (f failed) Get(context.Context) (string, error) { return "", f.err }
 var (
 	// azureStatus is the status line of an Azure SDK error, a few lines in.
 	azureStatus = regexp.MustCompile(`(?m)^RESPONSE (\d{3})\b`)
-	// requestIDs start the part of an Entra ID error description that
-	// changes on every attempt.
-	requestIDs = regexp.MustCompile(`\s*(?:Trace ID|Correlation ID|Timestamp):`)
+	// requestIDs are the parts of an Entra ID error that change on every attempt.
+	requestIDs = regexp.MustCompile(`\s*(?:(?:Trace|Correlation) ID: \S+|Timestamp: [\d-]+ [\d:.]+Z?)`)
 )
 
 // describe is an error in one line: its first line, since some tokenex errors
@@ -256,13 +261,22 @@ var (
 // IDs and timestamps, so a repeated failure reads the same.
 func describe(err error) string {
 	first, rest, multiline := strings.Cut(err.Error(), "\n")
-	if !multiline {
-		return first
+
+	desc := strings.TrimSpace(first)
+	if multiline {
+		if more := azureDetails(rest); len(more) > 0 {
+			desc = strings.Join(append([]string{strings.TrimRight(desc, ".")}, more...), ": ")
+		}
 	}
 
-	parts := []string{strings.TrimRight(first, ". ")}
+	return strings.TrimSpace(requestIDs.ReplaceAllString(desc, ""))
+}
+
+// azureDetails are the HTTP status and OAuth error of an Azure SDK error.
+func azureDetails(rest string) []string {
+	var more []string
 	if m := azureStatus.FindStringSubmatch(rest); m != nil {
-		parts = append(parts, "status "+m[1])
+		more = append(more, "status "+m[1])
 	}
 
 	var body struct {
@@ -273,18 +287,14 @@ func describe(err error) string {
 	if i, j := strings.Index(rest, "{"), strings.LastIndex(rest, "}"); i >= 0 && j > i &&
 		json.Unmarshal([]byte(rest[i:j+1]), &body) == nil && body.Error != "" {
 		oauth := body.Error
-		if loc := requestIDs.FindStringIndex(body.Description); loc != nil {
-			body.Description = body.Description[:loc[0]]
-		}
-
-		if desc := strings.TrimSpace(body.Description); desc != "" {
+		if desc := strings.TrimSpace(requestIDs.ReplaceAllString(body.Description, "")); desc != "" {
 			oauth += " — " + desc
 		}
 
-		parts = append(parts, oauth)
+		more = append(more, oauth)
 	}
 
-	return strings.Join(parts, ": ")
+	return more
 }
 
 func redact(tok string) string {

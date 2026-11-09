@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -48,12 +49,12 @@ func TestCredentialsReportChanges(t *testing.T) {
 	c, got := reports(t)
 	expiry := time.Now().Add(time.Hour)
 
-	c.fail(errTimeout) // held back: it may fix itself
+	c.fail(t.Context(), errTimeout) // held back: it may fix itself
 	c.set("tok-1", expiry)
 	c.set("tok-2", expiry) // a refresh
-	c.fail(errTimeout)
-	c.fail(errTimeout) // the same failure again
-	c.fail(errDenied)
+	c.fail(t.Context(), errTimeout)
+	c.fail(t.Context(), errTimeout) // the same failure again
+	c.fail(t.Context(), errDenied)
 	c.set("tok-3", expiry)
 
 	want := []string{
@@ -72,7 +73,7 @@ func TestCredentialsReportFirstFailure(t *testing.T) {
 
 	// A denied exchange won't fix itself, so it's reported right away.
 	denied, got := reports(t)
-	denied.fail(errDenied)
+	denied.fail(t.Context(), errDenied)
 
 	if len(*got) != 1 {
 		t.Errorf("denied: reports %v", *got)
@@ -81,10 +82,27 @@ func TestCredentialsReportFirstFailure(t *testing.T) {
 	// Other failures are reported once they last.
 	lasting, got := reports(t)
 	lasting.started = time.Now().Add(-reportGrace)
-	lasting.fail(errTimeout)
+	lasting.fail(t.Context(), errTimeout)
 
 	if len(*got) != 1 {
 		t.Errorf("lasting: reports %v", *got)
+	}
+}
+
+// TestCredentialsCancelled: an exchange that fails because its route goes
+// away isn't a failure to report.
+func TestCredentialsCancelled(t *testing.T) {
+	t.Parallel()
+
+	c, got := reports(t)
+	c.set("tok-1", time.Now().Add(time.Hour))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	c.fail(ctx, context.Canceled)
+
+	if want := []string{bindings.ReasonCredentialIssued}; !slices.Equal(*got, want) {
+		t.Errorf("reports %v; want %v", *got, want)
 	}
 }
 
@@ -137,6 +155,25 @@ func TestDescribeAzure(t *testing.T) {
 	}
 }
 
+// TestDescribeOneLine: tokenex's one-line errors keep their OAuth error,
+// without Entra ID's request IDs.
+func TestDescribeOneLine(t *testing.T) {
+	t.Parallel()
+
+	for msg, want := range map[string]string{
+		"could not exchange token: token endpoint error 400: invalid_grant — AADSTS70021: No matching federated identity " +
+			"record found for presented assertion. Trace ID: 5d2c8e1a-0b7f-4c3e-9a21-6f4d3b2e1c00 Correlation ID: " +
+			"a41f0c2e-7d3b-4e8a-b5c6-2f1e0d9c8b7a Timestamp: 2026-11-09 10:14:03Z": "could not exchange token: token endpoint " +
+			"error 400: invalid_grant — AADSTS70021: No matching federated identity record found for presented assertion.",
+		"could not exchange token: context deadline exceeded":                           "could not exchange token: context deadline exceeded",
+		"could not exchange token: unexpected EOF\ngoroutine 1 [running]:\nmain.main()": "could not exchange token: unexpected EOF",
+	} {
+		if got := describe(errors.New(msg)); got != want { //nolint:err113 // test errors
+			t.Errorf("describe(%q) =\n%s\nwant\n%s", msg, got, want)
+		}
+	}
+}
+
 // TestCredentialsReportAzureFailures: Azure failures share their first line,
 // so the rest tells them apart; a new trace ID alone doesn't.
 func TestCredentialsReportAzureFailures(t *testing.T) {
@@ -145,9 +182,9 @@ func TestCredentialsReportAzureFailures(t *testing.T) {
 	c, got := reports(t)
 	c.started = time.Now().Add(-reportGrace)
 
-	c.fail(azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "3f0b"))
-	c.fail(azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "77c2"))
-	c.fail(azureError(http.StatusUnauthorized, "invalid_grant", "AADSTS70021: No matching federated identity record.", "77c2"))
+	c.fail(t.Context(), azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "3f0b"))
+	c.fail(t.Context(), azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "77c2"))
+	c.fail(t.Context(), azureError(http.StatusUnauthorized, "invalid_grant", "AADSTS70021: No matching federated identity record.", "77c2"))
 
 	want := []string{bindings.ReasonTokenExchangeFailed, bindings.ReasonTokenExchangeFailed}
 	if !slices.Equal(*got, want) {

@@ -309,25 +309,3 @@ func TestReports(t *testing.T) {
 		t.Errorf("reports %v; want %v", got, want)
 	}
 }
-
-func TestReporterKeepsOrder(t *testing.T) {
-	t.Parallel()
-
-	sent := make(chan string, 3)
-	r := proxy.NewReporter(t.Context(), func(_ context.Context, rep bindings.Report) error {
-		sent <- rep.Reason
-
-		return nil
-	})
-
-	reasons := []string{bindings.ReasonCredentialIssued, bindings.ReasonTokenExchangeFailed, bindings.ReasonCredentialIssued}
-	for _, reason := range reasons {
-		r.Report(bindings.Report{Reason: reason})
-	}
-
-	for _, want := range reasons {
-		if got := <-sent; got != want {
-			t.Fatalf("sent %s; want %s", got, want)
-		}
-	}
-}

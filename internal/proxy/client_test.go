@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,8 +92,17 @@ func TestBindingsClientReport(t *testing.T) {
 		t.Errorf("server got %+v", r)
 	}
 
-	if err := c.Report(t.Context(), bindings.Report{Reason: "Rotated"}); err == nil {
-		t.Error("a refused report should be an error")
+	long := bindings.Report{Binding: rep.Binding, Reason: rep.Reason, Message: strings.Repeat("x", 20<<10)}
+	if err := c.Report(t.Context(), long); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := <-got; len(r.Message) > bindings.MaxMessage {
+		t.Errorf("sent a %d-byte message", len(r.Message))
+	}
+
+	if err := c.Report(t.Context(), bindings.Report{Reason: "Rotated"}); !errors.Is(err, proxy.ErrReportRefused) {
+		t.Errorf("a refused report: %v", err)
 	}
 }
 

@@ -21,4 +21,4 @@ note "the proxy's log: the bindings, the token from the provider, the request"
 expect "kubectl logs deploy/support-bot -c waterwheel-proxy" "added token"
 note "the pod's events: the controller records what the proxy reports"
 # shellcheck disable=SC2016 # expanded when the step runs it
-expect_eventually 'kubectl events --for "$(kubectl get pod -l app=support-bot -o name)"' "CredentialIssued"
+expect_eventually 'kubectl events --for "$(kubectl get pod -l app=support-bot --sort-by=.metadata.creationTimestamp -o name | tail -n 1)"' "CredentialIssued"

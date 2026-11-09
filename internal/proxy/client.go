@@ -21,7 +21,12 @@ import (
 	"go.riptides.io/waterwheel/internal/bindings"
 )
 
-var errBadCA = errors.New("controller CA doesn't parse")
+var (
+	errBadCA = errors.New("controller CA doesn't parse")
+	// ErrReportRefused is a report the controller turned down, rather than
+	// failed to take.
+	ErrReportRefused = errors.New("report refused")
+)
 
 // BindingsClient watches the controller's bindings API for this pod's bindings.
 type BindingsClient struct {
@@ -78,8 +83,11 @@ func (c *BindingsClient) Watch(ctx context.Context, update func(bindings.Snapsho
 	}
 }
 
-// Report sends rep to the controller, for an event on the pod.
+// Report sends rep to the controller, for an event on the pod. It cuts the
+// message to what an event takes.
 func (c *BindingsClient) Report(ctx context.Context, rep bindings.Report) error {
+	rep.Message = bindings.Truncate(rep.Message)
+
 	body, err := json.Marshal(rep)
 	if err != nil {
 		return err
@@ -98,11 +106,14 @@ func (c *BindingsClient) Report(ctx context.Context, rep bindings.Report) error 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		return nil
+	case resp.StatusCode < http.StatusInternalServerError:
+		return fmt.Errorf("%w: %s", ErrReportRefused, resp.Status)
+	default:
 		return fmt.Errorf("reports API: %s", resp.Status) //nolint:err113 // carries the status
 	}
-
-	return nil
 }
 
 // request is a request to the API, with the pod's current token.
