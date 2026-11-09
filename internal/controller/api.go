@@ -4,6 +4,7 @@ package controller
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -47,6 +48,8 @@ type API struct {
 	TrustDomain string
 	// Recorder gets the events of reports.
 	Recorder events.EventRecorder
+	// ReportTimeout bounds how long a report may take to arrive; 10 seconds if zero.
+	ReportTimeout time.Duration
 }
 
 // reportEvents are the reasons a proxy may report, with their event's type and action.
@@ -69,6 +72,12 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 
 		return
+	}
+
+	// A report is small, so bound how long its body may take. Watches are
+	// GETs without a body, and keep no deadline.
+	if method == http.MethodPost {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(cmp.Or(a.ReportTimeout, 10*time.Second)))
 	}
 
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")

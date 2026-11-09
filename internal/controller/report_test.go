@@ -3,14 +3,18 @@
 package controller_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -187,5 +191,53 @@ func TestReportsSPIRE(t *testing.T) {
 	events := rec.take()
 	if len(events) != 1 || events[0].typ != corev1.EventTypeWarning || events[0].note == "" || events[0].note == "the proxy's words" {
 		t.Errorf("events %+v; want one warning, with the controller's reason", events)
+	}
+}
+
+// TestReportsSlowBody: a report whose body never finishes doesn't hold the
+// connection, while a watch on another connection keeps streaming.
+func TestReportsSlowBody(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(&controller.API{
+		Auth: fakeAuth{}, Reader: newClient(t, anthropicSource(), newBinding("first")),
+		SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster(), Recorder: &recorder{},
+		ReportTimeout: 100 * time.Millisecond,
+	})
+	t.Cleanup(srv.Close)
+
+	watch := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
+	t.Cleanup(func() { _ = watch.Body.Close() })
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Promise 100 bytes, send one.
+	_, err = io.WriteString(conn, "POST /v1/reports HTTP/1.1\r\nHost: waterwheel\r\nAuthorization: Bearer "+goodToken+
+		"\r\nContent-Length: 100\r\n\r\n{")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a stalled report: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status %d; want 400", resp.StatusCode)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	lines := bufio.NewScanner(watch.Body)
+	if n := next(t, lines); n != 1 {
+		t.Errorf("the watch got %d bindings; want 1", n)
 	}
 }
