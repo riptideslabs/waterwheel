@@ -56,10 +56,9 @@ type API struct {
 	watches map[[sha256.Size]byte]*openWatch // by token
 }
 
-// openWatch is a watch's caller, and the snapshot it sent last.
+// openWatch is the snapshot a watch sent last.
 type openWatch struct {
-	caller Caller
-	snap   bindings.Snapshot
+	snap bindings.Snapshot
 }
 
 // reportEvents are the reasons a proxy may report, with their event's type and action.
@@ -188,16 +187,15 @@ func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, erro
 // pod has no identity.
 //
 // A proxy reports about what its watch sent it. A report with the token of an
-// open watch takes that watch's caller and snapshot, rather than reviewing the
-// token and resolving the pod's bindings again.
+// open watch takes the snapshot that watch sent last, rather than resolving the
+// pod's bindings again. The token is still checked: its pod may be gone.
 func (a *API) report(w http.ResponseWriter, r *http.Request, token string) {
-	c, snap, watched := a.watched(token)
-	if !watched {
-		var ok bool
-		if c, ok = a.authenticate(w, r, token); !ok {
-			return
-		}
+	c, ok := a.authenticate(w, r, token)
+	if !ok {
+		return
 	}
+
+	snap, watched := a.watched(token)
 
 	var rep bindings.Report
 	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&rep); err != nil {
@@ -266,16 +264,16 @@ func resolve(set *identity.Set, c Caller) (string, string) {
 	return id, ""
 }
 
-// watched returns the caller and latest snapshot of the open watch with token.
-func (a *API) watched(token string) (Caller, bindings.Snapshot, bool) {
+// watched returns the latest snapshot of the open watch with token.
+func (a *API) watched(token string) (bindings.Snapshot, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if o, ok := a.watches[sha256.Sum256([]byte(token))]; ok {
-		return o.caller, o.snap, true
+		return o.snap, true
 	}
 
-	return Caller{}, bindings.Snapshot{}, false
+	return bindings.Snapshot{}, false
 }
 
 func (a *API) watch(w http.ResponseWriter, r *http.Request, token string, c Caller) {
@@ -292,7 +290,7 @@ func (a *API) watch(w http.ResponseWriter, r *http.Request, token string, c Call
 	w.Header().Set("Content-Type", "application/x-ndjson")
 
 	key := sha256.Sum256([]byte(token))
-	open := &openWatch{caller: c}
+	open := &openWatch{}
 
 	defer func() {
 		a.mu.Lock()

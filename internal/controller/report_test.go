@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/bindings"
@@ -190,27 +191,44 @@ func TestReportsMessages(t *testing.T) {
 	}
 }
 
-// countingAuth counts authentications.
-type countingAuth struct {
+// revocableAuth stops accepting goodToken once revoked, as when its pod goes.
+type revocableAuth struct {
 	fakeAuth
 
-	n atomic.Int32
+	revoked atomic.Bool
 }
 
-func (c *countingAuth) Authenticate(ctx context.Context, token string) (controller.Caller, error) {
-	c.n.Add(1)
+func (a *revocableAuth) Authenticate(ctx context.Context, token string) (controller.Caller, error) {
+	if a.revoked.Load() {
+		return controller.Caller{}, errBadToken
+	}
 
-	return c.fakeAuth.Authenticate(ctx, token)
+	return a.fakeAuth.Authenticate(ctx, token)
 }
 
-// TestReportsOnAWatch: a report with the token of an open watch takes that
-// watch's caller and bindings, without authenticating again.
+// countingReader counts lists.
+type countingReader struct {
+	client.Reader
+
+	lists atomic.Int32
+}
+
+func (r *countingReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	r.lists.Add(1)
+
+	return r.Reader.List(ctx, list, opts...)
+}
+
+// TestReportsOnAWatch: a report with the token of an open watch takes the
+// bindings that watch sent, without listing them again, but its token is
+// still checked.
 func TestReportsOnAWatch(t *testing.T) {
 	t.Parallel()
 
-	auth := &countingAuth{}
+	auth := &revocableAuth{}
+	reader := &countingReader{Reader: newClient(t, anthropicSource(), newBinding("first"))}
 	srv := httptest.NewServer(&controller.API{
-		Auth: auth, Reader: newClient(t, anthropicSource(), newBinding("first")),
+		Auth: auth, Reader: reader,
 		SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster(), Recorder: &recorder{},
 	})
 	t.Cleanup(srv.Close)
@@ -218,6 +236,8 @@ func TestReportsOnAWatch(t *testing.T) {
 	watch := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
 	t.Cleanup(func() { _ = watch.Body.Close() })
 	next(t, bufio.NewScanner(watch.Body))
+
+	lists := reader.lists.Load()
 
 	if got := post(t, srv.URL, goodToken, bindings.Report{
 		Binding: namespace + "/first", Reason: bindings.ReasonCredentialIssued,
@@ -231,12 +251,16 @@ func TestReportsOnAWatch(t *testing.T) {
 		t.Errorf("another pod's binding: status %d", got)
 	}
 
-	if got := post(t, srv.URL, "bad", bindings.Report{Reason: bindings.ReasonCredentialIssued}); got != http.StatusForbidden {
-		t.Errorf("bad token: status %d", got)
+	if n := reader.lists.Load(); n != lists {
+		t.Errorf("%d lists for two reports; want none", n-lists)
 	}
 
-	if n := auth.n.Load(); n != 2 {
-		t.Errorf("%d authentications; want the watch's and the bad token's", n)
+	auth.revoked.Store(true)
+
+	if got := post(t, srv.URL, goodToken, bindings.Report{
+		Binding: namespace + "/first", Reason: bindings.ReasonCredentialIssued,
+	}); got != http.StatusForbidden {
+		t.Errorf("a revoked token: status %d", got)
 	}
 }
 

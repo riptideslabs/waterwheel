@@ -5,6 +5,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -153,4 +154,30 @@ func TestReporterDropsRefused(t *testing.T) {
 
 	r.Report(issued("c"))
 	r.sends(t, "c")
+}
+
+// TestReporterBounded: while the controller is away, the Reporter keeps at
+// most maxPending reports, the latest.
+func TestReporterBounded(t *testing.T) {
+	t.Parallel()
+
+	r := gatedReporter(t, func(bindings.Report) error { return nil })
+
+	r.Report(issued("first"))
+	r.tries(t, "first")
+
+	for i := range 2 * maxPending {
+		r.Report(issued(strconv.Itoa(i)))
+	}
+
+	r.mu.Lock()
+	n, oldest := len(r.pending), r.pending[0].Binding
+	r.mu.Unlock()
+
+	if n != maxPending || oldest != strconv.Itoa(maxPending) {
+		t.Errorf("%d pending, the oldest about %s; want %d, from %d", n, oldest, maxPending, maxPending)
+	}
+
+	r.release <- struct{}{}
+	r.sends(t, strconv.Itoa(maxPending))
 }

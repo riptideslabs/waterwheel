@@ -17,11 +17,15 @@ import (
 // controller replica's cache may not have the pod's binding yet.
 const refusedTries = 5
 
+// maxPending bounds the reports kept while the controller is away, as
+// bindings may come and go meanwhile. The oldest go first.
+const maxPending = 64
+
 // Reporter sends reports to the controller in the background. It keeps the
 // latest report about each binding, and about the pod's identity, until the
 // controller takes it, so a pod doesn't keep a stale event because a report
-// was lost. Events are best-effort, though: Report never blocks, and a report
-// the controller keeps refusing is dropped.
+// was lost. Events are best-effort, though: Report never blocks, a report the
+// controller keeps refusing is dropped, and so is the oldest beyond maxPending.
 type Reporter struct {
 	backoff time.Duration
 
@@ -57,6 +61,10 @@ func (r *Reporter) Report(rep bindings.Report) {
 	r.seq++
 	r.pending = slices.DeleteFunc(r.pending, func(p pending) bool { return p.Binding == rep.Binding })
 	r.pending = append(r.pending, pending{Report: rep, seq: r.seq})
+
+	if extra := len(r.pending) - maxPending; extra > 0 {
+		r.pending = slices.Delete(r.pending, 0, extra)
+	}
 	r.mu.Unlock()
 
 	select {
