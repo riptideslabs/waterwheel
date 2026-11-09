@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -241,11 +242,49 @@ type failed struct{ err error }
 
 func (f failed) Get(context.Context) (string, error) { return "", f.err }
 
-// describe is the first line of an error; some tokenex errors carry a stack trace.
-func describe(err error) string {
-	first, _, _ := strings.Cut(err.Error(), "\n")
+var (
+	// azureStatus is the status line of an Azure SDK error, a few lines in.
+	azureStatus = regexp.MustCompile(`(?m)^RESPONSE (\d{3})\b`)
+	// requestIDs start the part of an Entra ID error description that
+	// changes on every attempt.
+	requestIDs = regexp.MustCompile(`\s*(?:Trace ID|Correlation ID|Timestamp):`)
+)
 
-	return first
+// describe is an error in one line: its first line, since some tokenex errors
+// carry a stack trace, plus the HTTP status and OAuth error that Azure SDK
+// errors carry further down. It leaves out Entra ID's trace and correlation
+// IDs and timestamps, so a repeated failure reads the same.
+func describe(err error) string {
+	first, rest, multiline := strings.Cut(err.Error(), "\n")
+	if !multiline {
+		return first
+	}
+
+	parts := []string{strings.TrimRight(first, ". ")}
+	if m := azureStatus.FindStringSubmatch(rest); m != nil {
+		parts = append(parts, "status "+m[1])
+	}
+
+	var body struct {
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+	}
+
+	if i, j := strings.Index(rest, "{"), strings.LastIndex(rest, "}"); i >= 0 && j > i &&
+		json.Unmarshal([]byte(rest[i:j+1]), &body) == nil && body.Error != "" {
+		oauth := body.Error
+		if loc := requestIDs.FindStringIndex(body.Description); loc != nil {
+			body.Description = body.Description[:loc[0]]
+		}
+
+		if desc := strings.TrimSpace(body.Description); desc != "" {
+			oauth += " — " + desc
+		}
+
+		parts = append(parts, oauth)
+	}
+
+	return strings.Join(parts, ": ")
 }
 
 func redact(tok string) string {

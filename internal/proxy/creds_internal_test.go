@@ -4,7 +4,9 @@ package proxy
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"testing"
 	"time"
@@ -105,5 +107,50 @@ func TestDenied(t *testing.T) {
 		if got := denied(errors.New(msg)); got != want { //nolint:err113 // test errors
 			t.Errorf("denied(%q) = %v; want %v", msg, got, want)
 		}
+	}
+}
+
+// azureError is an exchange error the way tokenex passes on Azure SDK errors.
+func azureError(status int, code, desc, traceID string) error {
+	return fmt.Errorf("failed to retrieve credentials: ClientAssertionCredential authentication failed. \n"+ //nolint:err113 // test errors
+		"POST https://login.microsoftonline.com/660ef1de-f447-4cf2-b1ba-1194e8f5b0fc/oauth2/v2.0/token\n"+
+		"--------------------------------------------------------------------------------\n"+
+		"RESPONSE %d: %d %s\n"+
+		"--------------------------------------------------------------------------------\n"+
+		"{\n  \"error\": %q,\n  \"error_description\": %q,\n  \"trace_id\": %q\n}\n"+
+		"--------------------------------------------------------------------------------\n"+
+		"To troubleshoot, visit https://aka.ms/azsdk/go/identity/troubleshoot#workload",
+		status, status, http.StatusText(status), code,
+		desc+"\r\nTrace ID: "+traceID+"\r\nCorrelation ID: 9a1c\r\nTimestamp: 2026-11-09 09:52:22Z", traceID)
+}
+
+func TestDescribeAzure(t *testing.T) {
+	t.Parallel()
+
+	got := describe(azureError(http.StatusBadRequest, "invalid_client",
+		"AADSTS700016: Application with identifier 'support-bot' was not found in the directory 'Riptides'.", "3f0b"))
+
+	want := "failed to retrieve credentials: ClientAssertionCredential authentication failed: status 400: " +
+		"invalid_client — AADSTS700016: Application with identifier 'support-bot' was not found in the directory 'Riptides'."
+	if got != want {
+		t.Errorf("describe() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestCredentialsReportAzureFailures: Azure failures share their first line,
+// so the rest tells them apart; a new trace ID alone doesn't.
+func TestCredentialsReportAzureFailures(t *testing.T) {
+	t.Parallel()
+
+	c, got := reports(t)
+	c.started = time.Now().Add(-reportGrace)
+
+	c.fail(azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "3f0b"))
+	c.fail(azureError(http.StatusBadRequest, "invalid_client", "AADSTS700016: Application not found.", "77c2"))
+	c.fail(azureError(http.StatusUnauthorized, "invalid_grant", "AADSTS70021: No matching federated identity record.", "77c2"))
+
+	want := []string{bindings.ReasonTokenExchangeFailed, bindings.ReasonTokenExchangeFailed}
+	if !slices.Equal(*got, want) {
+		t.Errorf("reports %v; want %v", *got, want)
 	}
 }
