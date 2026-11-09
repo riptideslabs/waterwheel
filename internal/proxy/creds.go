@@ -4,8 +4,11 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +25,10 @@ var (
 	errNoToken         = errors.New("no valid token")
 )
 
+// reportGrace holds back the report of a first failure that may fix itself:
+// SPIRE issues a new pod's SVIDs a few seconds late.
+const reportGrace = 30 * time.Second
+
 // Tokens is what a route needs from its credentials: a valid access token.
 type Tokens interface {
 	Get(ctx context.Context) (string, error)
@@ -30,25 +37,33 @@ type Tokens interface {
 // credentials keeps a current access token for one binding. tokenex refreshes
 // it before expiry; when tokenex reports an error (its channel then closes) it
 // backs off and starts over, or retries right away when a request is waiting.
-// Ported from the KCD demo's creds.go.
+// It reports when it first gets a token, starts failing, fails differently,
+// or recovers. Ported from the KCD demo's creds.go.
 type credentials struct {
 	binding bindings.Binding
 	subject token.IdentityTokenProvider
 	log     *slog.Logger
+	report  func(bindings.Report)
+	started time.Time
 
-	mu      sync.Mutex
-	access  string
-	expiry  time.Time
-	lastErr error
-	changed chan struct{} // closed and replaced on every result
-	kick    chan struct{}
+	mu       sync.Mutex
+	access   string
+	expiry   time.Time
+	lastErr  error
+	reported string        // the last report's reason and, for a failure, its error
+	changed  chan struct{} // closed and replaced on every result
+	kick     chan struct{}
 }
 
-func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger) *credentials {
+func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
+	report func(bindings.Report),
+) *credentials {
 	return &credentials{
 		binding: b,
 		subject: subject,
 		log:     log,
+		report:  report,
+		started: time.Now(),
 		changed: make(chan struct{}),
 		kick:    make(chan struct{}, 1),
 	}
@@ -61,11 +76,11 @@ func (c *credentials) run(ctx context.Context) {
 	for ctx.Err() == nil {
 		ch, err := Exchange(ctx, tokenexLog, c.binding, c.subject)
 		if err != nil {
-			c.fail(err)
+			c.fail(ctx, err)
 		} else {
 			for res := range ch {
 				if res.Err != nil {
-					c.fail(res.Err)
+					c.fail(ctx, res.Err)
 
 					break
 				}
@@ -104,7 +119,29 @@ func (c *credentials) denied() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.lastErr != nil && strings.Contains(c.lastErr.Error(), "status 4")
+	return denied(c.lastErr)
+}
+
+// refusal finds a 4xx status in an exchange error: tokenex's "token endpoint
+// returned status 401" and "token endpoint error 400: invalid_grant", Google's
+// "Error 403" and "response code 403", and Azure's "RESPONSE 400".
+var refusal = regexp.MustCompile(`(?i)\b(?:status|error|response(?: code)?) (4\d\d)\b`)
+
+// transient are the OAuth errors (RFC 6749) for an outage, which some token
+// endpoints return with a 400.
+var transient = regexp.MustCompile(`\b(?:temporarily_unavailable|server_error)\b`)
+
+// denied: the token endpoint refused the exchange. A timeout, a rate limit or
+// an outage isn't a refusal.
+func denied(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	m := refusal.FindStringSubmatch(msg)
+
+	return m != nil && m[1] != "408" && m[1] != "429" && !transient.MatchString(msg)
 }
 
 func (c *credentials) set(access string, expiry time.Time) {
@@ -116,9 +153,17 @@ func (c *credentials) set(access string, expiry time.Time) {
 	c.changed = make(chan struct{})
 
 	c.log.Info("got an access token", "token", redact(access), "expiresIn", until(expiry))
+
+	if c.reported != bindings.ReasonCredentialIssued {
+		c.reported = bindings.ReasonCredentialIssued
+		c.send(bindings.ReasonCredentialIssued,
+			fmt.Sprintf("%s issued a token, valid for %s", ProviderName(c.binding), until(expiry)))
+	}
 }
 
-func (c *credentials) fail(err error) {
+// fail records an exchange's failure. When ctx is done, the route is going
+// away, as its binding changed: the failure is only its cancellation.
+func (c *credentials) fail(ctx context.Context, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -126,7 +171,28 @@ func (c *credentials) fail(err error) {
 	close(c.changed)
 	c.changed = make(chan struct{})
 
-	c.log.Warn("token exchange failed", "err", describe(err))
+	if ctx.Err() != nil {
+		return
+	}
+
+	msg := describe(err)
+	c.log.Warn("token exchange failed", "err", msg)
+
+	if c.reported == "" && !denied(err) && time.Since(c.started) < reportGrace {
+		return
+	}
+
+	if key := bindings.ReasonTokenExchangeFailed + ": " + msg; c.reported != key {
+		c.reported = key
+		c.send(bindings.ReasonTokenExchangeFailed,
+			fmt.Sprintf("token exchange with %s failed: %s", ProviderName(c.binding), msg))
+	}
+}
+
+func (c *credentials) send(reason, msg string) {
+	if c.report != nil {
+		c.report(bindings.Report{Binding: c.binding.Namespace + "/" + c.binding.Name, Reason: reason, Message: msg})
+	}
 }
 
 func (c *credentials) valid() (string, bool) {
@@ -182,11 +248,53 @@ type failed struct{ err error }
 
 func (f failed) Get(context.Context) (string, error) { return "", f.err }
 
-// describe is the first line of an error; some tokenex errors carry a stack trace.
-func describe(err error) string {
-	first, _, _ := strings.Cut(err.Error(), "\n")
+var (
+	// azureStatus is the status line of an Azure SDK error, a few lines in.
+	azureStatus = regexp.MustCompile(`(?m)^RESPONSE (\d{3})\b`)
+	// requestIDs are the parts of an Entra ID error that change on every attempt.
+	requestIDs = regexp.MustCompile(`\s*(?:(?:Trace|Correlation) ID: \S+|Timestamp: [\d-]+ [\d:.]+Z?)`)
+)
 
-	return first
+// describe is an error in one line: its first line, since some tokenex errors
+// carry a stack trace, plus the HTTP status and OAuth error that Azure SDK
+// errors carry further down. It leaves out Entra ID's trace and correlation
+// IDs and timestamps, so a repeated failure reads the same.
+func describe(err error) string {
+	first, rest, multiline := strings.Cut(err.Error(), "\n")
+
+	desc := strings.TrimSpace(first)
+	if multiline {
+		if more := azureDetails(rest); len(more) > 0 {
+			desc = strings.Join(append([]string{strings.TrimRight(desc, ".")}, more...), ": ")
+		}
+	}
+
+	return strings.TrimSpace(requestIDs.ReplaceAllString(desc, ""))
+}
+
+// azureDetails are the HTTP status and OAuth error of an Azure SDK error.
+func azureDetails(rest string) []string {
+	var more []string
+	if m := azureStatus.FindStringSubmatch(rest); m != nil {
+		more = append(more, "status "+m[1])
+	}
+
+	var body struct {
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+	}
+
+	if i, j := strings.Index(rest, "{"), strings.LastIndex(rest, "}"); i >= 0 && j > i &&
+		json.Unmarshal([]byte(rest[i:j+1]), &body) == nil && body.Error != "" {
+		oauth := body.Error
+		if desc := strings.TrimSpace(requestIDs.ReplaceAllString(body.Description, "")); desc != "" {
+			oauth += " — " + desc
+		}
+
+		more = append(more, oauth)
+	}
+
+	return more
 }
 
 func redact(tok string) string {

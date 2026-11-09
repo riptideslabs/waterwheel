@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,17 +42,7 @@ func TestBindingsClient(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("the-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
-
-	c, err := proxy.NewBindingsClient(strings.TrimPrefix(srv.URL, "https://"), tokenPath, caPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := bindingsClient(t, srv)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -69,6 +60,69 @@ func TestBindingsClient(t *testing.T) {
 			t.Fatal("no snapshot")
 		}
 	}
+}
+
+func TestBindingsClientReport(t *testing.T) {
+	t.Parallel()
+
+	got := make(chan bindings.Report, 1)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rep bindings.Report
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/reports" || r.Header.Get("Authorization") != "Bearer the-token" ||
+			json.NewDecoder(r.Body).Decode(&rep) != nil || rep.Reason != bindings.ReasonCredentialIssued {
+			http.Error(w, "bad report", http.StatusBadRequest)
+
+			return
+		}
+
+		got <- rep
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := bindingsClient(t, srv)
+
+	rep := bindings.Report{Binding: "support/support-bot-anthropic", Reason: bindings.ReasonCredentialIssued, Message: "Anthropic issued a token"}
+	if err := c.Report(t.Context(), rep); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := <-got; r != rep {
+		t.Errorf("server got %+v", r)
+	}
+
+	long := bindings.Report{Binding: rep.Binding, Reason: rep.Reason, Message: strings.Repeat("x", 20<<10)}
+	if err := c.Report(t.Context(), long); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := <-got; len(r.Message) > bindings.MaxMessage {
+		t.Errorf("sent a %d-byte message", len(r.Message))
+	}
+
+	if err := c.Report(t.Context(), bindings.Report{Reason: "Rotated"}); !errors.Is(err, proxy.ErrReportRefused) {
+		t.Errorf("a refused report: %v", err)
+	}
+}
+
+// bindingsClient is a client of srv, with the token the-token.
+func bindingsClient(t *testing.T, srv *httptest.Server) *proxy.BindingsClient {
+	t.Helper()
+
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("the-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+
+	c, err := proxy.NewBindingsClient(strings.TrimPrefix(srv.URL, "https://"), tokenPath, caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return c
 }
 
 func TestTokenFile(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +44,43 @@ type Binding struct {
 	Header       string                        `json:"header"`
 	// Scheme precedes the token in the header; empty means the bare token.
 	Scheme string `json:"scheme"`
+}
+
+// Reasons a proxy reports.
+const (
+	ReasonCredentialIssued    = "CredentialIssued"
+	ReasonTokenExchangeFailed = "TokenExchangeFailed"
+	ReasonNoSubjectToken      = "NoSubjectToken"
+	ReasonNoWorkloadIdentity  = "NoWorkloadIdentity"
+)
+
+// Report is what a proxy tells the controller when its credentials change,
+// for an event on its pod.
+type Report struct {
+	// Binding is the binding's namespace/name; empty for NoWorkloadIdentity.
+	Binding string `json:"binding,omitempty"`
+	Reason  string `json:"reason"`
+	Message string `json:"message,omitempty"`
+}
+
+// MaxMessage is the longest note an event takes, so the longest message a
+// report needs.
+const MaxMessage = 1024
+
+// Truncate cuts s to at most MaxMessage bytes, at a rune boundary.
+func Truncate(s string) string {
+	if len(s) <= MaxMessage {
+		return s
+	}
+
+	const more = "…"
+
+	cut := MaxMessage - len(more)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut] + more
 }
 
 var (

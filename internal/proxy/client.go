@@ -4,12 +4,14 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,7 +21,12 @@ import (
 	"go.riptides.io/waterwheel/internal/bindings"
 )
 
-var errBadCA = errors.New("controller CA doesn't parse")
+var (
+	errBadCA = errors.New("controller CA doesn't parse")
+	// ErrReportRefused is a report the controller turned down, rather than
+	// failed to take.
+	ErrReportRefused = errors.New("report refused")
+)
 
 // BindingsClient watches the controller's bindings API for this pod's bindings.
 type BindingsClient struct {
@@ -76,19 +83,62 @@ func (c *BindingsClient) Watch(ctx context.Context, update func(bindings.Snapsho
 	}
 }
 
-// watchOnce follows one stream; got reports whether it delivered anything.
-func (c *BindingsClient) watchOnce(ctx context.Context, update func(bindings.Snapshot)) (bool, error) {
-	tok, err := os.ReadFile(c.TokenPath)
+// Report sends rep to the controller, for an event on the pod. It cuts the
+// message to what an event takes.
+func (c *BindingsClient) Report(ctx context.Context, rep bindings.Report) error {
+	rep.Message = bindings.Truncate(rep.Message)
+
+	body, err := json.Marshal(rep)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+c.Addr+"/v1/bindings?watch=true", nil)
+	req, err := c.request(ctx, http.MethodPost, "/v1/reports", bytes.NewReader(body))
 	if err != nil {
-		return false, err
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		return nil
+	case resp.StatusCode < http.StatusInternalServerError:
+		return fmt.Errorf("%w: %s", ErrReportRefused, resp.Status)
+	default:
+		return fmt.Errorf("reports API: %s", resp.Status) //nolint:err113 // carries the status
+	}
+}
+
+// request is a request to the API, with the pod's current token.
+func (c *BindingsClient) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	tok, err := os.ReadFile(c.TokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+c.Addr+path, body)
+	if err != nil {
+		return nil, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+
+	return req, nil
+}
+
+// watchOnce follows one stream; got reports whether it delivered anything.
+func (c *BindingsClient) watchOnce(ctx context.Context, update func(bindings.Snapshot)) (bool, error) {
+	req, err := c.request(ctx, http.MethodGet, "/v1/bindings?watch=true", nil)
+	if err != nil {
+		return false, err
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

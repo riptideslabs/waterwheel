@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ import (
 var (
 	errNotJWT     = errors.New("not a JWT")
 	errNoProvider = errors.New("the source names no provider")
+	errNoAudience = errors.New("the pod started before a binding needed this audience; restart it")
 )
 
 // Subjects returns a binding's subject token provider, for the pod's SPIFFE
@@ -41,6 +43,11 @@ type Subjects func(spiffeID string, b bindings.Binding) (token.IdentityTokenProv
 // its audience, from dir.
 func TokenFiles(dir string) Subjects {
 	return func(_ string, b bindings.Binding) (token.IdentityTokenProvider, error) {
+		// Projected tokens are fixed when the pod starts, so a missing one stays missing.
+		if _, err := os.Stat(filepath.Join(dir, bindings.TokenFile(b.Audience))); errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("no token for audience %s: %w", b.Audience, errNoAudience)
+		}
+
 		return TokenFile(dir, b.Audience), nil
 	}
 }

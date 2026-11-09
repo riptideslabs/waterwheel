@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -45,6 +46,8 @@ type BindingStatus struct {
 	// WorkloadIdentities is set with SPIFFE sources: a binding applies to the
 	// pods of a WorkloadIdentity in effect with its workloadID.
 	WorkloadIdentities bool
+	// Recorder gets an event for each condition change.
+	Recorder events.EventRecorder
 }
 
 func (r *BindingStatus) SetupWithManager(mgr ctrl.Manager) error {
@@ -67,6 +70,7 @@ func (r *BindingStatus) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	before := slices.Clone(b.Status.Conditions)
 	ready, audience := r.ready(ctx, &b)
 	changed := setCondition(&b, &b.Status.Conditions, ready)
 
@@ -88,7 +92,13 @@ func (r *BindingStatus) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return result, nil
 	}
 
-	return result, r.Client.Status().Update(ctx, &b)
+	if err := r.Client.Status().Update(ctx, &b); err != nil {
+		return result, err
+	}
+
+	recordTransitions(r.Recorder, &b, actionReconcile, before, b.Status.Conditions)
+
+	return result, nil
 }
 
 func setCondition(obj client.Object, conds *[]metav1.Condition, c metav1.Condition) bool {
