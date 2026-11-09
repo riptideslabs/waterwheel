@@ -1,7 +1,8 @@
 # Releasing
 
 Pushing a `v*` tag runs [release.yml](../.github/workflows/release.yml). It
-runs CI and the e2e tests on the tagged commit, then:
+refuses a tag whose commit isn't on main, runs CI and the e2e tests on the
+commit, then:
 
 - builds `waterwheel-controller`, `waterwheel-proxy` and `waterwheel-agent` for
   linux/amd64 and linux/arm64, with SBOM and provenance attestations, as
@@ -29,7 +30,9 @@ The chart in the repository keeps `appVersion: dev`, for images built locally
 ```bash
 cosign verify ghcr.io/riptideslabs/waterwheel-proxy:v0.1.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/riptideslabs/waterwheel/\.github/workflows/release\.yml@refs/tags/v'
+  --certificate-identity https://github.com/riptideslabs/waterwheel/.github/workflows/release.yml@refs/tags/v0.1.0
 ```
 
-The chart is verified the same way, as `ghcr.io/riptideslabs/charts/waterwheel:0.1.0`.
+The identity names the tag, so a signature made for another tag doesn't
+verify. The chart is verified the same way, as
+`ghcr.io/riptideslabs/charts/waterwheel:0.1.0`.
