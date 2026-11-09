@@ -11,6 +11,7 @@ import (
 
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -27,6 +28,10 @@ const (
 	extraPodName = "authentication.kubernetes.io/pod-name"
 	extraPodUID  = "authentication.kubernetes.io/pod-uid"
 )
+
+// ErrAuthUnavailable is a failure to check a token, such as a Kubernetes API
+// error, rather than a token that fails the check. Callers may try again.
+var ErrAuthUnavailable = errors.New("can't check the token now")
 
 var (
 	errNotAuthenticated = errors.New("token not authenticated")
@@ -71,7 +76,7 @@ type TokenReviewer struct {
 func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller, error) {
 	review := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{Audience}}}
 	if err := t.Client.Create(ctx, review); err != nil {
-		return Caller{}, fmt.Errorf("TokenReview: %w", err)
+		return Caller{}, fmt.Errorf("%w: TokenReview: %w", ErrAuthUnavailable, err)
 	}
 
 	st := review.Status
@@ -96,8 +101,10 @@ func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller,
 	}
 
 	var pod corev1.Pod
-	if err := t.Pods.Get(ctx, client.ObjectKey{Namespace: ns, Name: podName}, &pod); err != nil {
+	if err := t.Pods.Get(ctx, client.ObjectKey{Namespace: ns, Name: podName}, &pod); apierrors.IsNotFound(err) {
 		return Caller{}, fmt.Errorf("%w: %w", errNotPod, err)
+	} else if err != nil {
+		return Caller{}, fmt.Errorf("%w: reading the pod: %w", ErrAuthUnavailable, err)
 	}
 
 	if string(pod.UID) != podUID || pod.Spec.ServiceAccountName != sa ||

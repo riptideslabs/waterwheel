@@ -206,6 +206,31 @@ func (a *revocableAuth) Authenticate(ctx context.Context, token string) (control
 	return a.fakeAuth.Authenticate(ctx, token)
 }
 
+// unavailableAuth can't check tokens, as when the Kubernetes API is down.
+type unavailableAuth struct{}
+
+func (unavailableAuth) Authenticate(context.Context, string) (controller.Caller, error) {
+	return controller.Caller{}, fmt.Errorf("%w: TokenReview: etcd timeout", controller.ErrAuthUnavailable)
+}
+
+// TestReportsAuthUnavailable: a report whose token can't be checked now gets
+// a 503, so the proxy tries again, rather than a 403 it gives up on.
+func TestReportsAuthUnavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(&controller.API{
+		Auth: unavailableAuth{}, Reader: newClient(t, anthropicSource(), newBinding("first")),
+		SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster(), Recorder: &recorder{},
+	})
+	t.Cleanup(srv.Close)
+
+	if got := post(t, srv.URL, goodToken, bindings.Report{
+		Binding: namespace + "/first", Reason: bindings.ReasonCredentialIssued,
+	}); got != http.StatusServiceUnavailable {
+		t.Errorf("status %d; want 503", got)
+	}
+}
+
 // countingReader counts lists.
 type countingReader struct {
 	client.Reader

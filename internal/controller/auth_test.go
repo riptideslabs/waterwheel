@@ -4,10 +4,12 @@ package controller_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -32,10 +34,14 @@ func TestTokenReviewer(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		status func(s *authnv1.TokenReviewStatus)
-		pod    func(p *corev1.Pod)
-		ok     bool
+		name      string
+		status    func(s *authnv1.TokenReviewStatus)
+		pod       func(p *corev1.Pod)
+		createErr error // the TokenReview's
+		getErr    error // the pod's
+		ok        bool
+		// unavailable: the token couldn't be checked, rather than failed.
+		unavailable bool
 	}{
 		{name: "valid", ok: true},
 		{name: "not authenticated", status: func(s *authnv1.TokenReviewStatus) { s.Authenticated = false }},
@@ -45,6 +51,9 @@ func TestTokenReviewer(t *testing.T) {
 		{name: "pod replaced", pod: func(p *corev1.Pod) { p.UID = "uid-2" }},
 		{name: "pod runs as another account", pod: func(p *corev1.Pod) { p.Spec.ServiceAccountName = "other" }},
 		{name: "pod finished", pod: func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded }},
+		{name: "pod gone", getErr: apierrors.NewNotFound(corev1.Resource("pods"), podName)},
+		{name: "TokenReview fails", createErr: apierrors.NewServiceUnavailable("etcd timeout"), unavailable: true},
+		{name: "pod read fails", getErr: apierrors.NewTimeoutError("pods", 1), unavailable: true},
 	}
 
 	for _, tt := range tests {
@@ -74,13 +83,24 @@ func TestTokenReviewer(t *testing.T) {
 
 					review.Status = status
 
-					return nil
+					return tt.createErr
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if tt.getErr != nil {
+						return tt.getErr
+					}
+
+					return c.Get(ctx, key, obj, opts...)
 				},
 			}).Build()
 
 			caller, err := (&controller.TokenReviewer{Client: c, Pods: c}).Authenticate(t.Context(), "token")
 			if tt.ok != (err == nil) {
 				t.Fatalf("Authenticate() error = %v; want ok = %v", err, tt.ok)
+			}
+
+			if got := errors.Is(err, controller.ErrAuthUnavailable); got != tt.unavailable {
+				t.Errorf("Authenticate() error = %v; want unavailable = %v", err, tt.unavailable)
 			}
 
 			if tt.ok && caller.Identity() != identity {

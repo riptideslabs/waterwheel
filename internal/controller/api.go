@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -132,7 +133,12 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request, token string) (Caller, bool) {
 	caller, err := a.Auth.Authenticate(r.Context(), token)
-	if err != nil {
+	if errors.Is(err, ErrAuthUnavailable) {
+		slog.Warn("can't authenticate a request", "remote", r.RemoteAddr, "err", err)
+		http.Error(w, "can't check the token now", http.StatusServiceUnavailable)
+
+		return Caller{}, false
+	} else if err != nil {
 		slog.Info("bindings request refused", "remote", r.RemoteAddr, "reason", err)
 		http.Error(w, "forbidden", http.StatusForbidden)
 
