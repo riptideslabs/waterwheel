@@ -18,6 +18,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.riptides.io/waterwheel/internal/version"
 )
 
 func main() {
@@ -44,7 +46,7 @@ func run(socket, controller, nodeName, healthAddr string) error {
 	defer cancel()
 
 	// TODO(M1): bootstrap with the controller, attest callers, serve the Workload API.
-	slog.Info("starting", "socket", socket, "controller", controller, "node", nodeName)
+	slog.Info("starting", "version", version.Version(), "socket", socket, "controller", controller, "node", nodeName)
 
 	return serveHealth(ctx, healthAddr)
 }

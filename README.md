@@ -14,8 +14,8 @@ instead, for the pod's `WorkloadIdentity`.
   deployed by default.
 
 **Status: early preview.** The controller, proxy, chart, and a kind end-to-end
-demo are implemented, but there is no tagged Waterwheel release or published
-production support claim yet. See [the design](docs/design.md) and
+demo are implemented and released as previews, with no production support
+claim yet. See [the design](docs/design.md) and
 [the milestone notes](docs/milestone-1.md) for scope and known limits.
 
 ## Quickstart: run the five-step demo
@@ -43,6 +43,21 @@ For a real provider, its federation rule must trust the cluster's issuer and
 signing keys; [docs/oidc.md](docs/oidc.md) explains that setup. The demo's
 `E2E_PROVIDER=anthropic` mode additionally needs Anthropic configuration; see
 [docs/milestone-1.md](docs/milestone-1.md).
+
+## Install
+
+Each [release](https://github.com/riptideslabs/waterwheel/releases) publishes
+the chart and its images, for amd64 and arm64, to GHCR:
+
+```bash
+helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0.1.0 \
+  --namespace waterwheel-system --create-namespace
+```
+
+Pods in namespaces labeled `waterwheel.riptides.io/inject=enabled` then get the
+sidecar. Helm doesn't upgrade CRDs, so apply a new release's before upgrading:
+`helm show crds oci://ghcr.io/riptideslabs/charts/waterwheel --version <new> | kubectl apply --server-side -f -`.
+Images and charts are signed; see [docs/releasing.md](docs/releasing.md).
 
 ## Security model and current limits
 

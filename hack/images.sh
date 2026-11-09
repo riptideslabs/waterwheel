@@ -4,14 +4,14 @@
 source "$(dirname "$0")/lib.sh"
 
 arch=$(vm_arch)
-out="$STATE/images"
+out="$STATE/images/linux/$arch"
 mkdir -p "$out"
 
 for bin in waterwheel-agent waterwheel-controller waterwheel-proxy; do
   log "building $bin (linux/$arch)"
   (cd "$ROOT" && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$out/$bin" "./cmd/$bin")
 done
-cp "$ROOT/build/Dockerfile" "$out/"
+cp "$ROOT/build/Dockerfile" "$STATE/images/"
 
 tag="${IMAGE_TAG:-dev}"
 for bin in waterwheel-agent waterwheel-controller waterwheel-proxy; do

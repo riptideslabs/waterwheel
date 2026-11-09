@@ -20,6 +20,7 @@ helm upgrade --install waterwheel "$ROOT/charts/waterwheel" \
   --set identity.source="$source" \
   --set trustDomain="${TRUST_DOMAIN:-waterwheel.test}" \
   --set issuer="${JWT_ISSUER:-https://oidc.waterwheel.test}" \
+  --set image.registry= \
   --set image.tag="${IMAGE_TAG:-dev}" \
   --wait --timeout 3m
 

@@ -24,10 +24,10 @@ spire:
 issuer: ""
 
 image:
-  # Prefix of the image names, e.g. ghcr.io/riptideslabs/. Empty for images
-  # loaded into kind.
-  registry: ""
-  tag: dev
+  # Prefix of the image names. Empty for images loaded into kind (make deploy).
+  registry: ghcr.io/riptideslabs/
+  # The chart's appVersion if empty: the images of the release the chart is from.
+  tag: ""
   pullPolicy: IfNotPresent
 
 controller:
