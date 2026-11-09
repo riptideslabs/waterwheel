@@ -14,7 +14,8 @@ commit, then:
 - makes a GitHub release with generated notes and the chart attached. A tag
   with a suffix, like `v0.1.0-rc.1`, makes a pre-release.
 
-To release main:
+Only repository admins can create, move or delete `v*` tags (the
+`release-tags` ruleset). To release main:
 
 ```bash
 git fetch origin
