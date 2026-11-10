@@ -387,6 +387,10 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 			return
 		}
 
+		// Otherwise the server drains and closes the request body once the
+		// response headers go out, failing an upstream request still sending it.
+		_ = http.NewResponseController(w).EnableFullDuplex()
+
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		rp.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, tok)))
 
