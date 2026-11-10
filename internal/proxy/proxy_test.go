@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -47,6 +48,12 @@ func echo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/v1/duplex" {
+		duplex(w, r)
+
+		return
+	}
+
 	err := json.NewEncoder(w).Encode(map[string]string{
 		"authorization": r.Header.Get("Authorization"),
 		"x-api-key":     r.Header.Get("X-Api-Key"),
@@ -71,6 +78,32 @@ func upgrade(w http.ResponseWriter, r *http.Request) {
 		r.Header.Get("Authorization") + "\n")
 	_ = brw.Flush()
 	_, _ = io.Copy(conn, brw.Reader)
+}
+
+// duplex sends its headers before it reads the request, then the request's
+// body back.
+func duplex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
+	w.WriteHeader(http.StatusOK)
+	_ = http.NewResponseController(w).Flush()
+	_, _ = io.Copy(w, r.Body)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// gatedBody blocks reads until open is closed.
+type gatedBody struct {
+	io.ReadCloser
+
+	open <-chan struct{}
+}
+
+func (b gatedBody) Read(p []byte) (int, error) {
+	<-b.open
+
+	return b.ReadCloser.Read(p)
 }
 
 type setup struct {
@@ -235,6 +268,45 @@ func TestWebSocket(t *testing.T) {
 
 	if line, _ := r.ReadString('\n'); line != "ping\n" {
 		t.Errorf("read %q back; want ping", line)
+	}
+}
+
+// TestBodyAfterResponseHeaders: an upstream can answer with headers before the
+// proxy has sent it the request body. The body must still reach it, and its
+// answer the app.
+func TestBodyAfterResponseHeaders(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: testToken})
+
+	// Hold the request body back until the app has the response headers.
+	open := make(chan struct{})
+	upstream := s.proxy.Upstream
+	s.proxy.Upstream = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r = r.Clone(r.Context())
+		r.Body = gatedBody{ReadCloser: r.Body, open: open}
+
+		return upstream.RoundTrip(r)
+	})
+
+	const body = `{"messages": [{"role": "user", "content": "hi"}]}`
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.bound.URL+"/v1/duplex", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	close(open)
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil || string(got) != body {
+		t.Errorf("read %q, %v; want the request body back", got, err)
 	}
 }
 
