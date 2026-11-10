@@ -1,9 +1,10 @@
 # Getting started
 
 This takes a cluster from no Waterwheel to an app that calls Anthropic with no
-API key. The app is `support-bot`, a Deployment in the `support` namespace
-that runs as the service account `support-bot`. Its identity is its service
-account token, the default; for SPIRE, see [the design](design.md).
+API key. It starts from an app that already runs: `support-bot`, a Deployment
+in the `support` namespace, running as the service account `support-bot` and
+calling `api.anthropic.com`. Use your own names instead. The app's identity is
+its service account token, the default; for SPIRE, see [the design](design.md).
 
 You need Kubernetes 1.29 or newer, because the proxy runs as a native sidecar,
 plus Helm and kubectl.
@@ -44,7 +45,8 @@ rule (`fdrl_…`) IDs for the next step.
 ## 3. Bind the credential
 
 A `CredentialSource` says how to get the token. A `CredentialBinding` gives it
-to a service account's pods for the hosts listed.
+to a service account's pods for the hosts listed. Save these as
+`credentials.yaml`, with the IDs from the last step:
 
 ```yaml
 apiVersion: core.riptides.io/v1alpha1
@@ -69,7 +71,11 @@ spec:
       - host: api.anthropic.com
 ```
 
-`kubectl -n support get credentialbindings` should show the binding as Ready.
+```bash
+kubectl apply -f credentials.yaml
+kubectl -n support get credentialbindings   # Ready: True
+```
+
 OpenAI, Google Cloud, Microsoft Entra ID, RFC 7523 and RFC 8693 endpoints work
 the same way, with their own fields under `spec`; see
 [the API](../api/v1alpha1/credentialsource_types.go).
