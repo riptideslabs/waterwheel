@@ -54,10 +54,10 @@ helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0
   --namespace waterwheel-system --create-namespace
 ```
 
-Pods in namespaces labeled `waterwheel.riptides.io/inject=enabled` then get the
-sidecar. Helm doesn't upgrade CRDs, so apply a new release's before upgrading:
-`helm show crds oci://ghcr.io/riptideslabs/charts/waterwheel --version <new> | kubectl apply --server-side -f -`.
-Images and charts are signed; see [docs/releasing.md](docs/releasing.md).
+[docs/getting-started.md](docs/getting-started.md) goes on from there to an app
+that calls Anthropic with no key: the provider's trust in the cluster, the
+objects, the namespace label, and upgrades. Images and charts are signed; see
+[docs/releasing.md](docs/releasing.md).
 
 ## Security model and current limits
 
