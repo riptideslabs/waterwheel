@@ -42,7 +42,7 @@ Waterwheel turns that demo into a product. By default the pod's service account 
 
 ## Try it locally
 
-Waterwheel is an **early preview**, with no tagged release yet. The local demo uses a fake provider, so you need no Anthropic or OpenAI account. Install Go 1.26 or newer, Docker, kind, kubectl, Helm and jq, and start Docker. Then run:
+Waterwheel is an **early preview**. The local demo uses a fake provider, so you need no Anthropic or OpenAI account. Install Go 1.26 or newer, Docker, kind, kubectl, Helm and jq, and start Docker. Then run:
 
 ```bash
 git clone https://github.com/riptideslabs/waterwheel.git
@@ -51,6 +51,17 @@ LIMA_VM= make e2e
 ```
 
 This creates a kind cluster named `waterwheel`. The five steps check that a request fails without the proxy, succeeds with it, and that the demo app has no mounted service account token. The demo sets `automountServiceAccountToken: false`. Look for `all five steps passed (provider: fake, identity: serviceAccountToken)`. Use `LIMA_VM= make down` to remove the cluster. See the [README](https://github.com/riptideslabs/waterwheel#quickstart-run-the-five-step-demo) for the SPIRE variant and current limits.
+
+## Install on your cluster
+
+Each [release](https://github.com/riptideslabs/waterwheel/releases) publishes the Helm chart and its images, for amd64 and arm64, signed with cosign. You need Kubernetes 1.29 or newer.
+
+```bash
+helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0.1.0 \
+  --namespace waterwheel-system --create-namespace
+```
+
+Then let the provider trust your cluster's service account issuer, add [the objects below](#the-waterwheel-objects), and label the namespace. The [getting started guide](https://github.com/riptideslabs/waterwheel/blob/main/docs/getting-started.md) goes through each step.
 
 ## How it works
 

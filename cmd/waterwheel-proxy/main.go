@@ -38,6 +38,7 @@ import (
 
 	"go.riptides.io/waterwheel/internal/bindings"
 	"go.riptides.io/waterwheel/internal/proxy"
+	"go.riptides.io/waterwheel/internal/version"
 )
 
 var errNotJWT = errors.New("not a JWT")
@@ -154,7 +155,7 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 		waitForSVID(ctx, workload, id, 25*time.Second-time.Since(start))
 	}
 
-	slog.Info("listening", "addr", listen, "ca", ca.Cert.Subject.CommonName, "caBundle", bundle)
+	slog.Info("listening", "version", version.Version(), "addr", listen, "ca", ca.Cert.Subject.CommonName, "caBundle", bundle)
 
 	srv := &http.Server{Addr: listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}
 

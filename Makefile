@@ -4,9 +4,10 @@ SHELL := /bin/bash
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 BINS := waterwheel-agent waterwheel-controller waterwheel-proxy
+DIST_ARCHES := amd64 arm64
 CHART_VALUES := --set trustDomain=waterwheel.test --set issuer=https://oidc.waterwheel.test
 
-.PHONY: help generate check-generate build test vet lint chart shellcheck check \
+.PHONY: help generate check-generate build dist test vet lint chart shellcheck check \
 	vm cluster images deploy dev api-check e2e e2e-setup e2e-reset e2e-trust demo down vm-delete site site-build
 
 help: ## List targets
@@ -24,6 +25,11 @@ check-generate: generate ## Fail if generated files aren't committed
 
 build: ## Build the binaries into bin/
 	@for b in $(BINS); do go build -o bin/$$b ./cmd/$$b || exit 1; done
+
+dist: ## Cross-compile the binaries for the images into dist/linux/<arch>/
+	@for a in $(DIST_ARCHES); do for b in $(BINS); do \
+		GOOS=linux GOARCH=$$a CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o dist/linux/$$a/$$b ./cmd/$$b || exit 1; \
+	done; done
 
 test: ## Run the unit tests
 	go test -race -count=1 ./...

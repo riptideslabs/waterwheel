@@ -36,6 +36,7 @@ import (
 	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/certs"
 	"go.riptides.io/waterwheel/internal/controller"
+	"go.riptides.io/waterwheel/internal/version"
 )
 
 type config struct {
@@ -229,7 +230,7 @@ func run(cfg config) error {
 		}
 	}
 
-	slog.Info("starting", "identitySource", cfg.source, "namespace", cfg.namespace, "api", cfg.apiAddr, "webhook", cfg.webhookAddr)
+	slog.Info("starting", "version", version.Version(), "identitySource", cfg.source, "namespace", cfg.namespace, "api", cfg.apiAddr, "webhook", cfg.webhookAddr)
 
 	return mgr.Start(ctx)
 }
