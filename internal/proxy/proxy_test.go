@@ -353,6 +353,25 @@ func TestNewSPIFFEIDRestartsCredentials(t *testing.T) {
 	}
 }
 
+// TestAudience: the audience is the first binding's, and empty without one.
+func TestAudience(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{})
+
+	if got := s.proxy.Audience(); got != "https://api.anthropic.com" {
+		t.Errorf("Audience() = %q", got)
+	}
+
+	snap := snapshot(t, s.bound.URL)
+	snap.Bindings = nil
+	s.proxy.Update(t.Context(), snap)
+
+	if got := s.proxy.Audience(); got != "" {
+		t.Errorf("Audience() without bindings = %q", got)
+	}
+}
+
 // TestReports: the proxy reports a missing subject token once, and each new
 // reason the pod has no identity.
 func TestReports(t *testing.T) {

@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	_ "golang.org/x/crypto/x509roots/fallback" // the image is FROM scratch
@@ -151,8 +152,8 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 
 	// SPIRE issues a new pod's SVIDs several seconds after it starts. Wait
 	// for them too, so the app's first requests don't fail.
-	if id := p.SPIFFEID(); workload != nil && id != "" {
-		waitForSVID(ctx, workload, id, 25*time.Second-time.Since(start))
+	if id, aud := p.SPIFFEID(), p.Audience(); workload != nil && id != "" && aud != "" {
+		waitForSVID(ctx, workload, id, aud, 25*time.Second-time.Since(start))
 	}
 
 	slog.Info("listening", "version", version.Version(), "addr", listen, "ca", ca.Cert.Subject.CommonName, "caBundle", bundle)
@@ -171,19 +172,20 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 	return nil
 }
 
-// waitForSVID waits until the Workload API has issued the pod's SPIFFE ID, or
-// for at most limit.
-func waitForSVID(ctx context.Context, workload *workloadapi.Client, id string, limit time.Duration) {
+// waitForSVID waits until the Workload API issues the pod's SPIFFE ID a
+// JWT-SVID for audience, as the exchange will ask, or for at most limit.
+func waitForSVID(ctx context.Context, workload *workloadapi.Client, id, audience string, limit time.Duration) {
+	subject, err := spiffeid.FromString(id)
+	if err != nil {
+		return // the exchange reports it
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 
 	for {
-		if x509, err := workload.FetchX509Context(ctx); err == nil {
-			for _, s := range x509.SVIDs {
-				if s.ID.String() == id {
-					return
-				}
-			}
+		if _, err := workload.FetchJWTSVID(ctx, jwtsvid.Params{Audience: audience, Subject: subject}); err == nil {
+			return
 		}
 
 		select {

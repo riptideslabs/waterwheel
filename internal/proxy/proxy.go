@@ -108,6 +108,18 @@ func (p *Proxy) SPIFFEID() string {
 	return p.spiffeID
 }
 
+// Audience is the first binding's audience from the latest snapshot, if any.
+func (p *Proxy) Audience() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if len(p.routes) == 0 {
+		return ""
+	}
+
+	return p.routes[0].binding.Audience
+}
+
 // Ready is closed once the first bindings snapshot has arrived.
 func (p *Proxy) Ready() <-chan struct{} {
 	p.mu.Lock()
