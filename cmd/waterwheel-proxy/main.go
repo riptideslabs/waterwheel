@@ -152,7 +152,7 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 
 	// SPIRE issues a new pod's SVIDs several seconds after it starts. Wait
 	// for them too, so the app's first requests don't fail.
-	if id, aud := p.SPIFFEID(), p.Audience(); workload != nil && id != "" && aud != "" {
+	if id, aud := p.SVIDParams(); workload != nil && id != "" && aud != "" {
 		waitForSVID(ctx, workload, id, aud, 25*time.Second-time.Since(start))
 	}
 

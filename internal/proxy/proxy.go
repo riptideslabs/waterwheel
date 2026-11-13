@@ -108,16 +108,17 @@ func (p *Proxy) SPIFFEID() string {
 	return p.spiffeID
 }
 
-// Audience is the first binding's audience from the latest snapshot, if any.
-func (p *Proxy) Audience() string {
+// SVIDParams is the pod's SPIFFE ID and its first binding's audience, if any,
+// from the same snapshot.
+func (p *Proxy) SVIDParams() (string, string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
 	if len(p.routes) == 0 {
-		return ""
+		return p.spiffeID, ""
 	}
 
-	return p.routes[0].binding.Audience
+	return p.spiffeID, p.routes[0].binding.Audience
 }
 
 // Ready is closed once the first bindings snapshot has arrived.

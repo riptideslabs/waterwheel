@@ -353,22 +353,28 @@ func TestNewSPIFFEIDRestartsCredentials(t *testing.T) {
 	}
 }
 
-// TestAudience: the audience is the first binding's, and empty without one.
-func TestAudience(t *testing.T) {
+// TestSVIDParams: the pod's SPIFFE ID and the first binding's audience, which
+// is empty without one.
+func TestSVIDParams(t *testing.T) {
 	t.Parallel()
+
+	const spiffeID = "spiffe://waterwheel.test/svid"
 
 	s := newSetup(t, staticTokens{})
 
-	if got := s.proxy.Audience(); got != "https://api.anthropic.com" {
-		t.Errorf("Audience() = %q", got)
+	snap := snapshot(t, s.bound.URL)
+	snap.SPIFFEID = spiffeID
+	s.proxy.Update(t.Context(), snap)
+
+	if id, aud := s.proxy.SVIDParams(); id != spiffeID || aud != "https://api.anthropic.com" {
+		t.Errorf("SVIDParams() = %q, %q", id, aud)
 	}
 
-	snap := snapshot(t, s.bound.URL)
 	snap.Bindings = nil
 	s.proxy.Update(t.Context(), snap)
 
-	if got := s.proxy.Audience(); got != "" {
-		t.Errorf("Audience() without bindings = %q", got)
+	if id, aud := s.proxy.SVIDParams(); id != spiffeID || aud != "" {
+		t.Errorf("SVIDParams() without bindings = %q, %q", id, aud)
 	}
 }
 
