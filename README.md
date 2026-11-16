@@ -50,7 +50,7 @@ Each [release](https://github.com/riptideslabs/waterwheel/releases) publishes
 the chart and its images, for amd64 and arm64, to GHCR:
 
 ```bash
-helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0.1.0 \
+helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel \
   --namespace waterwheel-system --create-namespace
 ```
 

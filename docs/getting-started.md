@@ -12,7 +12,7 @@ plus Helm and kubectl.
 ## 1. Install Waterwheel
 
 ```bash
-helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0.1.0 \
+helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel \
   --namespace waterwheel-system --create-namespace
 kubectl -n waterwheel-system rollout status deployment/waterwheel-controller
 ```
