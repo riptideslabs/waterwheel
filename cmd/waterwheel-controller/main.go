@@ -96,11 +96,9 @@ func run(cfg config) error {
 		return fmt.Errorf("unknown --identity-source %q", cfg.source)
 	}
 
-	var proxyEnv []corev1.EnvVar
-	if cfg.proxyEnv != "" {
-		if err := json.Unmarshal([]byte(cfg.proxyEnv), &proxyEnv); err != nil {
-			return fmt.Errorf("--proxy-env: %w", err)
-		}
+	proxyEnv, err := parseProxyEnv(cfg.proxyEnv)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -267,4 +265,25 @@ func notifyOnChange(ctx context.Context, c cache.Cache, b *controller.Broadcaste
 	}
 
 	return nil
+}
+
+// parseProxyEnv reads --proxy-env, a JSON list of EnvVars, refusing the
+// sidecar's own configuration.
+func parseProxyEnv(raw string) ([]corev1.EnvVar, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	var env []corev1.EnvVar
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, fmt.Errorf("--proxy-env: %w", err)
+	}
+
+	for _, e := range env {
+		if controller.ReservedProxyEnv(e.Name) {
+			return nil, fmt.Errorf("--proxy-env: %s is Waterwheel's own configuration", e.Name)
+		}
+	}
+
+	return env, nil
 }

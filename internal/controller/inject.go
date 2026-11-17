@@ -103,8 +103,8 @@ type Injector struct {
 	// mounts the SPIRE agent's socket.
 	CSIDriver string
 	// ProxyEnv is extra environment for the sidecar, such as the OTEL_*
-	// variables that turn on its metrics. It can't override the variables
-	// the sidecar needs.
+	// variables that turn on its metrics. It can't set ReservedProxyEnv, nor
+	// override what the sidecar is given.
 	ProxyEnv []corev1.EnvVar
 }
 
@@ -265,7 +265,7 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 		corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
 
 	for _, e := range i.ProxyEnv {
-		if !slices.ContainsFunc(env, func(have corev1.EnvVar) bool { return have.Name == e.Name }) {
+		if !ReservedProxyEnv(e.Name) && !slices.ContainsFunc(env, func(have corev1.EnvVar) bool { return have.Name == e.Name }) {
 			env = append(env, e)
 		}
 	}
@@ -338,6 +338,13 @@ func (i *Injector) volumes(auds []string) []corev1.Volume {
 func hasContainer(pod *corev1.Pod, name string) bool {
 	return slices.ContainsFunc(append(pod.Spec.InitContainers, pod.Spec.Containers...),
 		func(c corev1.Container) bool { return c.Name == name })
+}
+
+// ReservedProxyEnv is whether the sidecar reads name as its own
+// configuration, which only the injector sets: the WATERWHEEL_* variables and
+// SPIFFE_ENDPOINT_SOCKET, set or not depending on the identity source.
+func ReservedProxyEnv(name string) bool {
+	return strings.HasPrefix(name, "WATERWHEEL_") || name == "SPIFFE_ENDPOINT_SOCKET"
 }
 
 func hasEnv(c *corev1.Container, name string) bool {

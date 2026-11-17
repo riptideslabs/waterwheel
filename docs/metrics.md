@@ -16,7 +16,8 @@ works: `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` by default, or `grpc`),
 `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
 `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_RESOURCE_ATTRIBUTES`, and the rest.
 `OTEL_SDK_DISABLED=true` or `OTEL_METRICS_EXPORTER=none` turns them off again.
-Variables the sidecar needs itself can't be overridden.
+`proxy.env` can't set the sidecar's own configuration (the `WATERWHEEL_*`
+variables and `SPIFFE_ENDPOINT_SOCKET`): the controller refuses to start.
 
 The resource is `service.name=waterwheel-proxy` (unless `OTEL_SERVICE_NAME`
 says otherwise), `service.version`, `k8s.pod.name` and `k8s.namespace.name`.
@@ -53,6 +54,10 @@ Attributes:
 
 Durations use the HTTP conventions' buckets, which end at 10 seconds,
 extended with 30, 60, 120 and 300 for slow APIs such as LLMs.
+
+Each metric keeps at most 250 attribute sets per pod, since an app picks the
+destinations it connects to. Past that, new ones count together under
+`otel.metric.overflow=true`. `OTEL_GO_X_CARDINALITY_LIMIT` changes the limit.
 
 Traffic that doesn't go through the proxy (an app that ignores `HTTPS_PROXY`,
 plain TCP, or inbound connections) isn't measured.

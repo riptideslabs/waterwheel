@@ -45,6 +45,24 @@ func TestEnabled(t *testing.T) {
 	}
 }
 
+func TestCardinalityLimit(t *testing.T) {
+	t.Parallel()
+
+	if limit, ok := telemetry.CardinalityLimit(func(string) string { return "" }); !ok || limit != telemetry.DefaultCardinalityLimit {
+		t.Errorf("limit %d, %v; want %d", limit, ok, telemetry.DefaultCardinalityLimit)
+	}
+
+	if _, ok := telemetry.CardinalityLimit(func(k string) string {
+		if k == "OTEL_GO_X_CARDINALITY_LIMIT" {
+			return "5000"
+		}
+
+		return ""
+	}); ok {
+		t.Error("overrode OTEL_GO_X_CARDINALITY_LIMIT")
+	}
+}
+
 // Without an endpoint, Setup changes nothing and its shutdown is a no-op.
 func TestSetupDisabled(t *testing.T) {
 	t.Setenv(endpoint, "")

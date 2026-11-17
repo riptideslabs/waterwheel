@@ -68,13 +68,35 @@ func Setup(ctx context.Context, service, version string) (func(context.Context) 
 		return nil, err
 	}
 
-	provider := sdkmetric.NewMeterProvider(
+	opts := []sdkmetric.Option{
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)),
 		sdkmetric.WithResource(res),
-	)
+	}
+	if limit, ok := CardinalityLimit(os.Getenv); ok {
+		opts = append(opts, sdkmetric.WithCardinalityLimit(limit))
+	}
+
+	provider := sdkmetric.NewMeterProvider(opts...)
 	otel.SetMeterProvider(provider)
 
 	return provider.Shutdown, nil
+}
+
+// DefaultCardinalityLimit is how many attribute sets each metric keeps, unless
+// OTEL_GO_X_CARDINALITY_LIMIT says otherwise. A workload picks the
+// destinations of its connections, so it could make up endless server.address
+// and server.port values; past the limit they count together, in the set
+// otel.metric.overflow=true.
+const DefaultCardinalityLimit = 250
+
+// CardinalityLimit is the limit to set, and false when
+// OTEL_GO_X_CARDINALITY_LIMIT sets it, which the SDK reads itself.
+func CardinalityLimit(getenv func(string) string) (int, bool) {
+	if getenv("OTEL_GO_X_CARDINALITY_LIMIT") != "" {
+		return 0, false
+	}
+
+	return DefaultCardinalityLimit, true
 }
 
 // newExporter is the OTLP exporter OTEL_EXPORTER_OTLP_PROTOCOL picks,

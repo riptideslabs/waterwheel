@@ -213,6 +213,9 @@ func TestMutateProxyEnv(t *testing.T) {
 	inj.ProxyEnv = []corev1.EnvVar{
 		{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://collector:4318"},
 		{Name: "WATERWHEEL_CONTROLLER_CA", Value: "not the controller's"},
+		// Only the spire source sets these, which this injector doesn't use.
+		{Name: "WATERWHEEL_IDENTITY_SOURCE", Value: "spire"},
+		{Name: "SPIFFE_ENDPOINT_SOCKET", Value: "unix:///elsewhere.sock"},
 	}
 
 	pod := appPod(nil)
@@ -235,6 +238,12 @@ func TestMutateProxyEnv(t *testing.T) {
 
 	if env["WATERWHEEL_CONTROLLER_CA"].Value != "CA" {
 		t.Error("extra environment overrode the controller's CA")
+	}
+
+	for _, name := range []string{"WATERWHEEL_IDENTITY_SOURCE", "SPIFFE_ENDPOINT_SOCKET"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("extra environment set %s", name)
+		}
 	}
 
 	for name, field := range map[string]string{"POD_NAME": "metadata.name", "POD_NAMESPACE": "metadata.namespace"} {
