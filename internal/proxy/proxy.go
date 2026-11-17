@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -426,18 +427,35 @@ func (p *Proxy) forwarder(rt *route, host string, port int, identity string) htt
 		r.Body = body
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		sent := time.Now()
+
+		// Deferred, as ReverseProxy panics with http.ErrAbortHandler when the
+		// response breaks off mid-stream, which is passed on once recorded.
+		defer func(ctx context.Context) {
+			aborted := recover()
+
+			status, err := rec.status, rec.err
+
+			switch {
+			case err != nil:
+				// The error response is the proxy's own: upstream gave none.
+				status = 0
+			case aborted != nil:
+				err = errAborted
+			}
+
+			p.Metrics.request(ctx, b, r.Method, host, port, status, err, time.Since(sent), body.n.Load(), rec.written)
+
+			if aborted != nil {
+				slog.Warn("response broke off", "request", target, "identity", identity, "status", rec.status)
+				panic(aborted)
+			}
+
+			slog.Info("added token", "request", target, "token", redact(tok), "identity", identity,
+				"status", rec.status, "took", time.Since(start).Round(time.Millisecond))
+		}(r.Context())
+
 		rp.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, tok)))
-
-		took := time.Since(start)
-		status := rec.status
-		if rec.err != nil {
-			status = 0
-		}
-
-		p.Metrics.request(r.Context(), b, r.Method, host, port, status, rec.err, took, body.n.Load(), rec.written)
-
-		slog.Info("added token", "request", target, "token", redact(tok), "identity", identity,
-			"status", rec.status, "took", took.Round(time.Millisecond))
 	})
 }
 
@@ -460,6 +478,10 @@ func writeError(w http.ResponseWriter, status int, typ, msg string) {
 		slog.Debug("writing an error response", "err", err)
 	}
 }
+
+// errAborted is a response that broke off mid-stream: upstream cut it short,
+// or the app stopped reading it.
+var errAborted = errors.New("the response broke off")
 
 type statusRecorder struct {
 	http.ResponseWriter

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -104,7 +105,7 @@ func providerKind(b bindings.Binding) string {
 }
 
 // request records a request the proxy sent upstream for b. status is 0 when
-// err left it without a response.
+// err left it without a response; with a status, err broke the response off.
 func (m *Metrics) request(ctx context.Context, b bindings.Binding, method, host string, port, status int, err error,
 	took time.Duration, sent, received int64,
 ) {
@@ -113,14 +114,17 @@ func (m *Metrics) request(ctx context.Context, b bindings.Binding, method, host 
 	}
 
 	attrs := append(bindingAttrs(b),
-		semconv.HTTPRequestMethodKey.String(method),
+		methodAttr(method),
 		semconv.ServerAddress(host),
 		semconv.ServerPort(port),
 		semconv.URLScheme("https"))
 
 	switch {
-	case status == 0:
+	case err != nil:
 		attrs = append(attrs, semconv.ErrorTypeKey.String(errorType(err)))
+		if status != 0 {
+			attrs = append(attrs, semconv.HTTPResponseStatusCode(status))
+		}
 	case status >= 400:
 		attrs = append(attrs, semconv.HTTPResponseStatusCode(status), semconv.ErrorTypeKey.String(strconv.Itoa(status)))
 	default:
@@ -186,9 +190,40 @@ func (m *Metrics) exchange(ctx context.Context, b bindings.Binding, err error) {
 	m.exchanges.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
+// methodAttr is http.request.method, _OTHER for a method the HTTP
+// conventions don't know, so a client can't make up endless values.
+func methodAttr(method string) attribute.KeyValue {
+	switch method {
+	case http.MethodConnect:
+		return semconv.HTTPRequestMethodConnect
+	case http.MethodDelete:
+		return semconv.HTTPRequestMethodDelete
+	case http.MethodGet:
+		return semconv.HTTPRequestMethodGet
+	case http.MethodHead:
+		return semconv.HTTPRequestMethodHead
+	case http.MethodOptions:
+		return semconv.HTTPRequestMethodOptions
+	case http.MethodPatch:
+		return semconv.HTTPRequestMethodPatch
+	case http.MethodPost:
+		return semconv.HTTPRequestMethodPost
+	case http.MethodPut:
+		return semconv.HTTPRequestMethodPut
+	case http.MethodTrace:
+		return semconv.HTTPRequestMethodTrace
+	case "QUERY":
+		return semconv.HTTPRequestMethodQuery
+	}
+
+	return semconv.HTTPRequestMethodOther
+}
+
 // errorType is a short, low-cardinality name for err, for error.type.
 func errorType(err error) string {
 	switch {
+	case errors.Is(err, errAborted):
+		return "aborted"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, errExchangeTimeout):
 		return "timeout"
 	case errors.Is(err, context.Canceled):

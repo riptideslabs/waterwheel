@@ -241,7 +241,7 @@ func TestExchangeMetrics(t *testing.T) {
 		}
 	}
 
-	want := map[string]int64{"": 1, "refused": 1, "_OTHER": 1}
+	want := map[string]int64{"": 1, "refused": 1, other: 1}
 	if !maps.Equal(got, want) {
 		t.Errorf("exchanges by error.type %v; want %v", got, want)
 	}

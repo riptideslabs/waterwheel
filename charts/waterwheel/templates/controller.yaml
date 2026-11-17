@@ -157,7 +157,8 @@ spec:
         - --issuer={{ required "set issuer" .Values.issuer }}
         {{- end }}
         {{- with .Values.proxy.env }}
-        - {{ printf "--proxy-env=%s" (toJson .) | quote }}
+        {{- /* $$, so Kubernetes expands $(VAR) in each sidecar, not here. */}}
+        - {{ printf "--proxy-env=%s" (toJson . | replace "$" "$$") | quote }}
         {{- end }}
         env:
         - name: POD_NAMESPACE

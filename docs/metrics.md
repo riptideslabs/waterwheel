@@ -17,7 +17,8 @@ works: `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` by default, or `grpc`),
 `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_RESOURCE_ATTRIBUTES`, and the rest.
 `OTEL_SDK_DISABLED=true` or `OTEL_METRICS_EXPORTER=none` turns them off again.
 `proxy.env` can't set the sidecar's own configuration (the `WATERWHEEL_*`
-variables and `SPIFFE_ENDPOINT_SOCKET`): the controller refuses to start.
+variables and `SPIFFE_ENDPOINT_SOCKET`): the controller refuses to start. A
+value can refer to `$(POD_NAME)` and `$(POD_NAMESPACE)`, the workload's pod.
 
 The resource is `service.name=waterwheel-proxy` (unless `OTEL_SERVICE_NAME`
 says otherwise), `service.version`, `k8s.pod.name` and `k8s.namespace.name`.
@@ -41,9 +42,10 @@ they're the requests the proxy sends upstream with a token.
 Attributes:
 
 - `http.request.method`, `http.response.status_code`, `url.scheme`: the HTTP
-  conventions'.
+  conventions'. A method they don't know is `_OTHER`.
 - `server.address`, `server.port`: the destination the app asked for.
 - `error.type`: why it failed. The status code for a response of 400 or more;
+  `aborted` for one that broke off mid-stream, with its status code;
   `timeout`, `canceled`, `dns`, `dial`, `read` or `write` when there was none;
   `refused` for a token exchange the token endpoint refused; otherwise
   `_OTHER`.

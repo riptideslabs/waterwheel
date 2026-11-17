@@ -3,6 +3,7 @@
 package proxy_test
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,6 +93,25 @@ func only(t *testing.T, reader *sdkmetric.ManualReader, name string) point {
 	return point{}
 }
 
+// waitFor waits for each metric in want to have at least that many data
+// points: the proxy records once the app has had its response, and the
+// instruments don't record together.
+func waitFor(t *testing.T, reader *sdkmetric.ManualReader, want map[string]int) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for name, n := range want {
+		for len(points(t, reader, name)) < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s has %d data points; want %d", name, len(points(t, reader, name)), n)
+			}
+
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func hostPort(t *testing.T, raw string) (string, string) {
 	t.Helper()
 
@@ -109,6 +129,10 @@ func TestMetricsOfAnInterceptedRequest(t *testing.T) {
 	if status, _ := call(t, s.client, s.bound.URL); status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
+
+	waitFor(t, reader, map[string]int{
+		"http.client.request.duration": 1, "http.client.request.body.size": 1, "http.client.response.body.size": 1,
+	})
 
 	host, port := hostPort(t, s.bound.URL)
 	p := only(t, reader, "http.client.request.duration")
@@ -168,10 +192,7 @@ func TestMetricsOfATunnel(t *testing.T) {
 	// The tunnel is measured once the app's connection closes.
 	s.client.CloseIdleConnections()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for len(points(t, reader, "waterwheel.proxy.tunnel.duration")) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, reader, map[string]int{"waterwheel.proxy.tunnel.duration": 1, "waterwheel.proxy.tunnel.io": 2})
 
 	host, port := hostPort(t, s.other.URL)
 
@@ -193,5 +214,37 @@ func TestMetricsOfATunnel(t *testing.T) {
 
 	if _, err := strconv.Atoi(port); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A response that breaks off mid-stream is recorded, as failed, before the
+// proxy breaks off its own.
+func TestMetricsOfAResponseThatBrokeOff(t *testing.T) {
+	t.Parallel()
+
+	s, reader := measured(t, staticTokens{tok: testToken})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.bound.URL+"/v1/broken", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Error("the app read the whole response; want it broken off")
+	}
+
+	_ = resp.Body.Close()
+
+	waitFor(t, reader, map[string]int{"http.client.request.duration": 1})
+
+	p := only(t, reader, "http.client.request.duration")
+	if p.attr("error.type") != "aborted" || p.attr("http.response.status_code") != "200" || p.attr("http.request.method") != "GET" {
+		t.Errorf("error.type %q, status %q, method %q; want aborted, 200, GET",
+			p.attr("error.type"), p.attr("http.response.status_code"), p.attr("http.request.method"))
 	}
 }

@@ -54,6 +54,14 @@ func echo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/v1/broken" {
+		// Half a response, then the stream is cut.
+		_, _ = w.Write([]byte(`{"partial":`))
+		_ = http.NewResponseController(w).Flush()
+
+		panic(http.ErrAbortHandler)
+	}
+
 	err := json.NewEncoder(w).Encode(map[string]string{
 		"authorization": r.Header.Get("Authorization"),
 		"x-api-key":     r.Header.Get("X-Api-Key"),
