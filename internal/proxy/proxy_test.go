@@ -116,8 +116,9 @@ type setup struct {
 
 // newSetup runs a proxy with two upstream servers: bound gets the binding's
 // token, other is passed through. Like the providers' APIs, bound offers
-// HTTP/2, which the proxy prefers.
-func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
+// HTTP/2, which the proxy prefers. configure changes the proxy before it
+// serves.
+func newSetup(t *testing.T, tokens proxy.Tokens, configure ...func(*proxy.Proxy)) *setup {
 	t.Helper()
 
 	s := &setup{}
@@ -140,6 +141,10 @@ func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
 		s.starts.Add(1)
 
 		return tokens
+	}
+
+	for _, c := range configure {
+		c(s.proxy)
 	}
 
 	p := httptest.NewServer(s.proxy)

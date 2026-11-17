@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -54,6 +55,7 @@ type config struct {
 	proxyImage     string
 	pullPolicy     string
 	tokenTTL       int64
+	proxyEnv       string
 }
 
 func main() {
@@ -73,6 +75,7 @@ func main() {
 	flag.StringVar(&cfg.proxyImage, "proxy-image", "waterwheel-proxy:dev", "image of the injected sidecar")
 	flag.StringVar(&cfg.pullPolicy, "proxy-pull-policy", string(corev1.PullIfNotPresent), "pull policy of the injected sidecar")
 	flag.Int64Var(&cfg.tokenTTL, "token-ttl", 3600, "lifetime of the sidecar's projected tokens, in seconds")
+	flag.StringVar(&cfg.proxyEnv, "proxy-env", "", "extra environment of the injected sidecar, a JSON list of Kubernetes EnvVars")
 	flag.Parse()
 
 	if err := run(cfg); err != nil {
@@ -91,6 +94,13 @@ func run(cfg config) error {
 		return errors.New("the spire identity source needs --trust-domain")
 	case !spire && cfg.source != "serviceAccountToken":
 		return fmt.Errorf("unknown --identity-source %q", cfg.source)
+	}
+
+	var proxyEnv []corev1.EnvVar
+	if cfg.proxyEnv != "" {
+		if err := json.Unmarshal([]byte(cfg.proxyEnv), &proxyEnv); err != nil {
+			return fmt.Errorf("--proxy-env: %w", err)
+		}
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -156,6 +166,7 @@ func run(cfg config) error {
 		ControllerCA:    serving.CAPEM,
 		TokenTTL:        cfg.tokenTTL,
 		ConfigMaps:      mgr.GetAPIReader(),
+		ProxyEnv:        proxyEnv,
 	}
 
 	if spire {

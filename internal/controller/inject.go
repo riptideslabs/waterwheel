@@ -102,6 +102,10 @@ type Injector struct {
 	// CSIDriver is set with the spire source: the SPIFFE CSI driver that
 	// mounts the SPIRE agent's socket.
 	CSIDriver string
+	// ProxyEnv is extra environment for the sidecar, such as the OTEL_*
+	// variables that turn on its metrics. It can't override the variables
+	// the sidecar needs.
+	ProxyEnv []corev1.EnvVar
 }
 
 // ExtraRootsConfigMap holds CAs (key ca.crt) that both the proxy, upstream,
@@ -253,6 +257,17 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 			corev1.EnvVar{Name: "WATERWHEEL_IDENTITY_SOURCE", Value: "spire"},
 			corev1.EnvVar{Name: "SPIFFE_ENDPOINT_SOCKET", Value: "unix://" + WorkloadAPIDir + "/spire-agent.sock"})
 		mounts = append(mounts, corev1.VolumeMount{Name: workloadAPIVolume, MountPath: WorkloadAPIDir, ReadOnly: true})
+	}
+
+	// The pod, for the resource of the sidecar's metrics.
+	env = append(env,
+		corev1.EnvVar{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+		corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
+
+	for _, e := range i.ProxyEnv {
+		if !slices.ContainsFunc(env, func(have corev1.EnvVar) bool { return have.Name == e.Name }) {
+			env = append(env, e)
+		}
 	}
 
 	// A native sidecar: it starts, and passes its startup probe (CA bundle

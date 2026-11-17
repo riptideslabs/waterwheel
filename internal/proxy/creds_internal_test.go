@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"testing"
 	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/bindings"
@@ -38,7 +42,7 @@ func reports(t *testing.T) (*credentials, *[]string) {
 		}
 
 		got = append(got, r.Reason)
-	})
+	}, nil)
 
 	return c, &got
 }
@@ -50,12 +54,12 @@ func TestCredentialsReportChanges(t *testing.T) {
 	expiry := time.Now().Add(time.Hour)
 
 	c.fail(t.Context(), errTimeout) // held back: it may fix itself
-	c.set("tok-1", expiry)
-	c.set("tok-2", expiry) // a refresh
+	c.set(t.Context(), "tok-1", expiry)
+	c.set(t.Context(), "tok-2", expiry) // a refresh
 	c.fail(t.Context(), errTimeout)
 	c.fail(t.Context(), errTimeout) // the same failure again
 	c.fail(t.Context(), errDenied)
-	c.set("tok-3", expiry)
+	c.set(t.Context(), "tok-3", expiry)
 
 	want := []string{
 		bindings.ReasonCredentialIssued,
@@ -95,7 +99,7 @@ func TestCredentialsCancelled(t *testing.T) {
 	t.Parallel()
 
 	c, got := reports(t)
-	c.set("tok-1", time.Now().Add(time.Hour))
+	c.set(t.Context(), "tok-1", time.Now().Add(time.Hour))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -189,5 +193,56 @@ func TestCredentialsReportAzureFailures(t *testing.T) {
 	want := []string{bindings.ReasonTokenExchangeFailed, bindings.ReasonTokenExchangeFailed}
 	if !slices.Equal(*got, want) {
 		t.Errorf("reports %v; want %v", *got, want)
+	}
+}
+
+// Each exchange is counted, a refused one as such.
+func TestExchangeMetrics(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	b := bindings.Binding{
+		Namespace: "support", Name: "support-bot-anthropic",
+		Provider: v1alpha1.CredentialSourceSpec{Anthropic: &v1alpha1.AnthropicWIFCredentialProvider{}},
+	}
+	c := newCredentials(b, nil, slog.New(slog.DiscardHandler), nil,
+		NewMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))))
+
+	c.set(t.Context(), "token", time.Now().Add(time.Hour))
+	c.fail(t.Context(), errDenied)
+	c.fail(t.Context(), errTimeout)
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]int64{}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "waterwheel.proxy.token_exchanges" {
+				continue
+			}
+
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("token_exchanges is a %T", m.Data)
+			}
+
+			for _, dp := range sum.DataPoints {
+				kind, _ := dp.Attributes.Value("error.type")
+				if p, _ := dp.Attributes.Value("waterwheel.provider"); p.AsString() != "anthropic" {
+					t.Errorf("provider %q", p.AsString())
+				}
+
+				got[kind.AsString()] += dp.Value
+			}
+		}
+	}
+
+	want := map[string]int64{"": 1, "refused": 1, "_OTHER": 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("exchanges by error.type %v; want %v", got, want)
 	}
 }

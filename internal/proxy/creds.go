@@ -44,6 +44,7 @@ type credentials struct {
 	subject token.IdentityTokenProvider
 	log     *slog.Logger
 	report  func(bindings.Report)
+	metrics *Metrics
 	started time.Time
 
 	mu       sync.Mutex
@@ -56,13 +57,14 @@ type credentials struct {
 }
 
 func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
-	report func(bindings.Report),
+	report func(bindings.Report), metrics *Metrics,
 ) *credentials {
 	return &credentials{
 		binding: b,
 		subject: subject,
 		log:     log,
 		report:  report,
+		metrics: metrics,
 		started: time.Now(),
 		changed: make(chan struct{}),
 		kick:    make(chan struct{}, 1),
@@ -86,7 +88,7 @@ func (c *credentials) run(ctx context.Context) {
 				}
 
 				if tok, ok := res.Credential.(*credential.Oauth2Creds); ok {
-					c.set(tok.AccessToken, tok.Expiry)
+					c.set(ctx, tok.AccessToken, tok.Expiry)
 
 					backoff = 2 * time.Second
 				}
@@ -144,7 +146,7 @@ func denied(err error) bool {
 	return m != nil && m[1] != "408" && m[1] != "429" && !transient.MatchString(msg)
 }
 
-func (c *credentials) set(access string, expiry time.Time) {
+func (c *credentials) set(ctx context.Context, access string, expiry time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -153,6 +155,7 @@ func (c *credentials) set(access string, expiry time.Time) {
 	c.changed = make(chan struct{})
 
 	c.log.Info("got an access token", "token", redact(access), "expiresIn", until(expiry))
+	c.metrics.exchange(ctx, c.binding, nil)
 
 	if c.reported != bindings.ReasonCredentialIssued {
 		c.reported = bindings.ReasonCredentialIssued
@@ -174,6 +177,8 @@ func (c *credentials) fail(ctx context.Context, err error) {
 	if ctx.Err() != nil {
 		return
 	}
+
+	c.metrics.exchange(ctx, c.binding, err)
 
 	msg := describe(err)
 	c.log.Warn("token exchange failed", "err", msg)

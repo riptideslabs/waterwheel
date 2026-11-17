@@ -39,6 +39,7 @@ import (
 
 	"go.riptides.io/waterwheel/internal/bindings"
 	"go.riptides.io/waterwheel/internal/proxy"
+	"go.riptides.io/waterwheel/internal/telemetry"
 	"go.riptides.io/waterwheel/internal/version"
 )
 
@@ -123,6 +124,21 @@ func run(listen, controller, tokens, bundle, caKeyDir string, spire bool) error 
 
 		subjects = proxy.SPIRE(workload)
 	}
+
+	// Metrics are off unless the OTEL_* variables name an OTLP endpoint.
+	stopMetrics, err := telemetry.Setup(ctx, "waterwheel-proxy", version.Version())
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer scancel()
+
+		if err := stopMetrics(sctx); err != nil {
+			slog.Warn("flushing metrics", "err", err)
+		}
+	}()
 
 	p := proxy.New(ca, subjects)
 

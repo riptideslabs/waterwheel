@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.riptides.io/waterwheel/internal/bindings"
@@ -39,6 +40,8 @@ type Proxy struct {
 	// Report, if set, tells the controller about changes, for events on the
 	// pod. It must not block.
 	Report func(bindings.Report)
+	// Metrics, if set, records requests, tunnels and token exchanges.
+	Metrics *Metrics
 
 	mu       sync.RWMutex
 	identity string
@@ -67,7 +70,8 @@ func New(ca *CA, subjects Subjects) *Proxy {
 			IdleConnTimeout:     90 * time.Second,
 			MaxIdleConns:        10,
 		},
-		Dialer: &net.Dialer{Timeout: 10 * time.Second},
+		Dialer:  &net.Dialer{Timeout: 10 * time.Second},
+		Metrics: NewMetrics(nil),
 	}
 
 	p.NewTokens = func(ctx context.Context, spiffeID string, b bindings.Binding) Tokens {
@@ -84,7 +88,7 @@ func New(ca *CA, subjects Subjects) *Proxy {
 			return failed{err}
 		}
 
-		c := newCredentials(b, subject, log, p.report)
+		c := newCredentials(b, subject, log, p.report, p.Metrics)
 
 		go c.run(ctx)
 
@@ -248,20 +252,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rt, identity := p.match(host, port)
 	if rt == nil {
-		p.tunnel(w, r)
+		p.tunnel(w, r, host, port)
 
 		return
 	}
 
-	p.intercept(w, host, rt, identity)
+	p.intercept(w, host, port, rt, identity)
 }
 
 // tunnel connects the app straight to the destination.
-func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, host string, port int) {
+	start := time.Now()
+
 	upstream, err := p.Dialer.DialContext(r.Context(), "tcp", r.Host)
 	if err != nil {
 		slog.Info("CONNECT failed", "target", r.Host, "err", err)
 		http.Error(w, "waterwheel-proxy: "+err.Error(), http.StatusBadGateway)
+		p.Metrics.tunnel(r.Context(), host, port, err, time.Since(start), 0, 0)
 
 		return
 	}
@@ -275,9 +282,11 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("CONNECT passed through", "target", r.Host)
 
+	var sent, received int64
+
 	done := make(chan struct{}, 2)
-	pipe := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+	pipe := func(dst, src net.Conn, n *int64) {
+		*n, _ = io.Copy(dst, src)
 
 		if tc, ok := dst.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
@@ -286,14 +295,16 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 		done <- struct{}{}
 	}
 
-	go pipe(upstream, client)
-	go pipe(client, upstream)
+	go pipe(upstream, client, &sent)
+	go pipe(client, upstream, &received)
 
 	<-done
 	<-done
 
 	_ = client.Close()
 	_ = upstream.Close()
+
+	p.Metrics.tunnel(r.Context(), host, port, nil, time.Since(start), sent, received)
 }
 
 // hijack takes over the client connection and confirms the CONNECT.
@@ -322,7 +333,7 @@ func hijack(w http.ResponseWriter) (net.Conn, bool) {
 // intercept terminates TLS with a leaf from the pod CA and serves HTTP/1.1,
 // WebSocket upgrades included, on the decrypted connection until the client
 // closes it.
-func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identity string) {
+func (p *Proxy) intercept(w http.ResponseWriter, host string, port int, rt *route, identity string) {
 	cert, err := p.CA.Leaf(host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -343,7 +354,7 @@ func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identit
 
 	ln := newConnListener(tlsConn)
 	srv := &http.Server{
-		Handler:           p.forwarder(rt, identity),
+		Handler:           p.forwarder(rt, host, port, identity),
 		ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog:          log.New(io.Discard, "", 0),
 		ConnState: func(_ net.Conn, s http.ConnState) {
@@ -357,8 +368,9 @@ func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identit
 
 type tokenKey struct{}
 
-// forwarder sends each request on to the destination with the binding's token.
-func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
+// forwarder sends each request on to the destination, host:port, with the
+// binding's token.
+func (p *Proxy) forwarder(rt *route, host string, port int, identity string) http.Handler {
 	b := rt.binding
 
 	rp := &httputil.ReverseProxy{
@@ -383,6 +395,11 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 		ErrorLog:      log.New(io.Discard, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			slog.Warn("upstream error", "err", err)
+
+			if rec, ok := w.(*statusRecorder); ok {
+				rec.err = err
+			}
+
 			writeError(w, http.StatusBadGateway, "api_error", "waterwheel-proxy: upstream error: "+err.Error())
 		},
 	}
@@ -393,6 +410,7 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 
 		tok, err := rt.tokens.Get(r.Context())
 		if err != nil {
+			p.Metrics.refusal(r.Context(), b)
 			slog.Warn("refused: no token", "request", target, "identity", identity, "provider", ProviderName(b), "err", describe(err))
 			writeError(w, http.StatusForbidden, "permission_error",
 				fmt.Sprintf("waterwheel-proxy: %s did not issue a token to %s (%s)", ProviderName(b), identity, describe(err)))
@@ -404,11 +422,22 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 		// response headers go out, failing an upstream request still sending it.
 		_ = http.NewResponseController(w).EnableFullDuplex()
 
+		body := &countingReader{ReadCloser: r.Body}
+		r.Body = body
+
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		rp.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, tok)))
 
+		took := time.Since(start)
+		status := rec.status
+		if rec.err != nil {
+			status = 0
+		}
+
+		p.Metrics.request(r.Context(), b, r.Method, host, port, status, rec.err, took, body.n.Load(), rec.written)
+
 		slog.Info("added token", "request", target, "token", redact(tok), "identity", identity,
-			"status", rec.status, "took", time.Since(start).Round(time.Millisecond))
+			"status", rec.status, "took", took.Round(time.Millisecond))
 	})
 }
 
@@ -435,12 +464,37 @@ func writeError(w http.ResponseWriter, status int, typ, msg string) {
 type statusRecorder struct {
 	http.ResponseWriter
 
-	status int
+	status  int
+	written int64
+	// err is why upstream gave no response, if it didn't.
+	err error
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.written += int64(n)
+
+	return n, err
+}
+
+// countingReader counts the bytes read from a request body, which the
+// transport may still be reading after the response is done.
+type countingReader struct {
+	io.ReadCloser
+
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(b []byte) (int, error) {
+	n, err := c.ReadCloser.Read(b)
+	c.n.Add(int64(n))
+
+	return n, err
 }
 
 func (r *statusRecorder) Flush() {

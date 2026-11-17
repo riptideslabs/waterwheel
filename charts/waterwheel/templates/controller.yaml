@@ -156,6 +156,9 @@ spec:
         {{- if eq $source "waterwheel" }}
         - --issuer={{ required "set issuer" .Values.issuer }}
         {{- end }}
+        {{- with .Values.proxy.env }}
+        - {{ printf "--proxy-env=%s" (toJson .) | quote }}
+        {{- end }}
         env:
         - name: POD_NAMESPACE
           valueFrom:

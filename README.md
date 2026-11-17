@@ -57,7 +57,8 @@ helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel \
 [docs/getting-started.md](docs/getting-started.md) goes on from there to an app
 that calls Anthropic with no key: the provider's trust in the cluster, the
 objects, the namespace label, and upgrades. Images and charts are signed; see
-[docs/releasing.md](docs/releasing.md).
+[docs/releasing.md](docs/releasing.md). [docs/metrics.md](docs/metrics.md) turns
+on the proxy's OpenTelemetry metrics.
 
 ## Security model and current limits
 
