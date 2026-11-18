@@ -40,7 +40,15 @@ type Metrics struct {
 	tunnelDuration   metric.Float64Histogram
 	tunnelIO         metric.Int64Counter
 	exchanges        metric.Int64Counter
+	openConns        metric.Int64UpDownCounter
+	connDuration     metric.Float64Histogram
 }
+
+// The states of an HTTP client connection, for http.connection.state.
+const (
+	connActive = "active"
+	connIdle   = "idle"
+)
 
 // durationBuckets are the HTTP semantic conventions' for durations in seconds,
 // which end at 10, extended to 5 minutes: LLM APIs often take longer.
@@ -74,6 +82,11 @@ func NewMetrics(mp metric.MeterProvider) *Metrics {
 		metric.WithUnit("By"), metric.WithDescription("Bytes through connections passed through untouched."))
 	m.exchanges, _ = meter.Int64Counter("waterwheel.proxy.token_exchanges",
 		metric.WithUnit("{exchange}"), metric.WithDescription("Token exchanges, and their failures in error.type."))
+	m.openConns, _ = meter.Int64UpDownCounter("http.client.open_connections",
+		metric.WithUnit("{connection}"), metric.WithDescription("Number of outbound HTTP connections that are currently active or idle on the client."))
+	m.connDuration, _ = meter.Float64Histogram("http.client.connection.duration",
+		metric.WithUnit("s"), metric.WithDescription("The duration of the successfully established outbound HTTP connections."),
+		metric.WithExplicitBucketBoundaries(0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300))
 
 	return m
 }
@@ -104,9 +117,10 @@ func providerKind(b bindings.Binding) string {
 	return "unknown"
 }
 
-// request records a request the proxy sent upstream for b. status is 0 when
-// err left it without a response; with a status, err broke the response off.
-func (m *Metrics) request(ctx context.Context, b bindings.Binding, method, host string, port, status int, err error,
+// request records a request the proxy sent upstream for b, over HTTP version
+// ("" if it got no connection). status is 0 when err left it without a
+// response; with a status, err broke the response off.
+func (m *Metrics) request(ctx context.Context, b bindings.Binding, method, host string, port int, version string, status int, err error,
 	took time.Duration, sent, received int64,
 ) {
 	if m == nil {
@@ -118,6 +132,10 @@ func (m *Metrics) request(ctx context.Context, b bindings.Binding, method, host 
 		semconv.ServerAddress(host),
 		semconv.ServerPort(port),
 		semconv.URLScheme("https"))
+
+	if version != "" {
+		attrs = append(attrs, semconv.NetworkProtocolName("http"), semconv.NetworkProtocolVersion(version))
+	}
 
 	switch {
 	case err != nil:
@@ -149,14 +167,51 @@ func (m *Metrics) refusal(ctx context.Context, b bindings.Binding) {
 	m.refused.Add(ctx, 1, metric.WithAttributes(bindingAttrs(b)...))
 }
 
-// tunnel records a passed-through connection to host:port, or the failure to
-// open it.
-func (m *Metrics) tunnel(ctx context.Context, host string, port int, err error, took time.Duration, sent, received int64) {
+// connection moves c into or out of state, by n.
+func (m *Metrics) connection(ctx context.Context, c *upstreamConn, state string, n int64) {
+	if m == nil {
+		return
+	}
+
+	m.openConns.Add(ctx, n, metric.WithAttributes(
+		append(connAttrs(c), semconv.HTTPConnectionStateKey.String(state))...))
+}
+
+// connectionClosed records how long c lasted.
+func (m *Metrics) connectionClosed(ctx context.Context, c *upstreamConn, took time.Duration) {
+	if m == nil {
+		return
+	}
+
+	m.connDuration.Record(ctx, took.Seconds(), metric.WithAttributes(connAttrs(c)...))
+}
+
+func connAttrs(c *upstreamConn) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{semconv.ServerAddress(c.host), semconv.ServerPort(c.port), semconv.URLScheme("https")}
+
+	if peer := c.peer(); peer != "" {
+		attrs = append(attrs, semconv.NetworkPeerAddress(peer))
+	}
+
+	if c.version != "" {
+		attrs = append(attrs, semconv.NetworkProtocolVersion(c.version))
+	}
+
+	return attrs
+}
+
+// tunnel records a passed-through connection to host:port, at the address
+// peer, or the failure to open it.
+func (m *Metrics) tunnel(ctx context.Context, host string, port int, peer string, err error, took time.Duration, sent, received int64) {
 	if m == nil {
 		return
 	}
 
 	attrs := []attribute.KeyValue{semconv.ServerAddress(host), semconv.ServerPort(port)}
+	if peer != "" {
+		attrs = append(attrs, semconv.NetworkPeerAddress(peer))
+	}
+
 	if err != nil {
 		attrs = append(attrs, semconv.ErrorTypeKey.String(errorType(err)))
 	}

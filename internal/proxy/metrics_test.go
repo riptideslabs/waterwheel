@@ -18,6 +18,9 @@ import (
 	"go.riptides.io/waterwheel/internal/proxy"
 )
 
+// requestDuration is the HTTP client conventions' request duration metric.
+const requestDuration = "http.client.request.duration"
+
 // measured is a proxy setup recording metrics into a reader.
 func measured(t *testing.T, tokens proxy.Tokens) (*setup, *sdkmetric.ManualReader) {
 	t.Helper()
@@ -131,11 +134,11 @@ func TestMetricsOfAnInterceptedRequest(t *testing.T) {
 	}
 
 	waitFor(t, reader, map[string]int{
-		"http.client.request.duration": 1, "http.client.request.body.size": 1, "http.client.response.body.size": 1,
+		requestDuration: 1, "http.client.request.body.size": 1, "http.client.response.body.size": 1,
 	})
 
 	host, port := hostPort(t, s.bound.URL)
-	p := only(t, reader, "http.client.request.duration")
+	p := only(t, reader, requestDuration)
 
 	for key, want := range map[string]string{
 		"http.request.method":       "POST",
@@ -146,6 +149,8 @@ func TestMetricsOfAnInterceptedRequest(t *testing.T) {
 		"waterwheel.binding":        "support/bot-anthropic",
 		"waterwheel.provider":       "anthropic",
 		"error.type":                "",
+		"network.protocol.name":     "http",
+		"network.protocol.version":  "2",
 	} {
 		if got := p.attr(key); got != want {
 			t.Errorf("%s = %q; want %q", key, got, want)
@@ -175,7 +180,7 @@ func TestMetricsOfARefusedRequest(t *testing.T) {
 		t.Errorf("refusals %d for %q; want 1 for support/bot-anthropic", p.value, p.attr("waterwheel.binding"))
 	}
 
-	if pts := points(t, reader, "http.client.request.duration"); len(pts) != 0 {
+	if pts := points(t, reader, requestDuration); len(pts) != 0 {
 		t.Errorf("a refused request recorded as sent upstream: %v", pts)
 	}
 }
@@ -197,6 +202,10 @@ func TestMetricsOfATunnel(t *testing.T) {
 	host, port := hostPort(t, s.other.URL)
 
 	p := only(t, reader, "waterwheel.proxy.tunnel.duration")
+	if p.attr("network.peer.address") != host {
+		t.Errorf("network.peer.address = %q; want %s", p.attr("network.peer.address"), host)
+	}
+
 	if p.attr("server.address") != host || p.attr("server.port") != port || p.attr("error.type") != "" {
 		t.Errorf("tunnel to %s:%s (error %q); want %s:%s", p.attr("server.address"), p.attr("server.port"), p.attr("error.type"), host, port)
 	}
@@ -240,11 +249,59 @@ func TestMetricsOfAResponseThatBrokeOff(t *testing.T) {
 
 	_ = resp.Body.Close()
 
-	waitFor(t, reader, map[string]int{"http.client.request.duration": 1})
+	waitFor(t, reader, map[string]int{requestDuration: 1})
 
-	p := only(t, reader, "http.client.request.duration")
+	p := only(t, reader, requestDuration)
 	if p.attr("error.type") != "aborted" || p.attr("http.response.status_code") != "200" || p.attr("http.request.method") != "GET" {
 		t.Errorf("error.type %q, status %q, method %q; want aborted, 200, GET",
 			p.attr("error.type"), p.attr("http.response.status_code"), p.attr("http.request.method"))
+	}
+}
+
+// The proxy's connections to bound destinations: active while they carry a
+// request, idle after, and how long they lasted once closed.
+func TestMetricsOfConnections(t *testing.T) {
+	t.Parallel()
+
+	s, reader := measured(t, staticTokens{tok: testToken})
+
+	if status, _ := call(t, s.client, s.bound.URL); status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+
+	waitFor(t, reader, map[string]int{requestDuration: 1})
+
+	host, port := hostPort(t, s.bound.URL)
+	open := map[string]int64{}
+
+	for _, p := range points(t, reader, "http.client.open_connections") {
+		if p.attr("server.address") != host || p.attr("server.port") != port || p.attr("network.peer.address") != host ||
+			p.attr("network.protocol.version") != "2" || p.attr("url.scheme") != "https" {
+			t.Errorf("connection attributes %v", p.attrs.ToSlice())
+		}
+
+		open[p.attr("http.connection.state")] = p.value
+	}
+
+	if open["active"] != 0 || open["idle"] != 1 {
+		t.Errorf("open connections %v; want one idle", open)
+	}
+
+	upstream, ok := s.proxy.Upstream.(*http.Transport)
+	if !ok {
+		t.Fatal("the proxy's upstream isn't an http.Transport")
+	}
+
+	upstream.CloseIdleConnections()
+	waitFor(t, reader, map[string]int{"http.client.connection.duration": 1})
+
+	if p := only(t, reader, "http.client.connection.duration"); p.value != 1 || p.attr("network.peer.address") != host {
+		t.Errorf("%d closed connections to %q; want 1 to %s", p.value, p.attr("network.peer.address"), host)
+	}
+
+	for _, p := range points(t, reader, "http.client.open_connections") {
+		if p.value != 0 {
+			t.Errorf("%s connections %d after closing; want 0", p.attr("http.connection.state"), p.value)
+		}
 	}
 }

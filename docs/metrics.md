@@ -34,6 +34,8 @@ they're the requests the proxy sends upstream with a token.
 | `http.client.request.duration` | histogram | s | Each request to a bound destination. |
 | `http.client.request.body.size` | histogram | By | Its request body. |
 | `http.client.response.body.size` | histogram | By | Its response body, when there was a response. |
+| `http.client.open_connections` | updowncounter | `{connection}` | The proxy's connections to bound destinations, `active` while one carries a request, `idle` otherwise. |
+| `http.client.connection.duration` | histogram | s | How long each of those connections lasted. |
 | `waterwheel.proxy.refused_requests` | counter | `{request}` | Requests to a bound destination refused for want of a token. |
 | `waterwheel.proxy.token_exchanges` | counter | `{exchange}` | Token exchanges and refreshes, failed ones with `error.type`. |
 | `waterwheel.proxy.tunnel.duration` | histogram | s | Connections to any other destination, passed through untouched, or failing to open. |
@@ -43,7 +45,12 @@ Attributes:
 
 - `http.request.method`, `http.response.status_code`, `url.scheme`: the HTTP
   conventions'. A method they don't know is `_OTHER`.
+- `network.protocol.name`, `network.protocol.version`: `http`, and `1.1` or
+  `2`, as the proxy spoke it upstream.
+- `http.connection.state`: `active` or `idle`, on open connections.
 - `server.address`, `server.port`: the destination the app asked for.
+- `network.peer.address`: the IP address the proxy connected to for it, on
+  connections and tunnels.
 - `error.type`: why it failed. The status code for a response of 400 or more;
   `aborted` for one that broke off mid-stream, with its status code;
   `timeout`, `canceled`, `dns`, `dial`, `read` or `write` when there was none;

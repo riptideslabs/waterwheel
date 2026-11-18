@@ -62,18 +62,22 @@ type route struct {
 // New returns a proxy whose bindings get tokens from tokenex, exchanging the
 // subject tokens from subjects.
 func New(ca *CA, subjects Subjects) *Proxy {
-	p := &Proxy{
-		CA: ca,
-		Upstream: &http.Transport{
-			Proxy:               nil,
-			ForceAttemptHTTP2:   true,
-			TLSHandshakeTimeout: 10 * time.Second,
-			IdleConnTimeout:     90 * time.Second,
-			MaxIdleConns:        10,
-		},
-		Dialer:  &net.Dialer{Timeout: 10 * time.Second},
-		Metrics: NewMetrics(nil),
+	upstream := &http.Transport{
+		Proxy:               nil,
+		ForceAttemptHTTP2:   true,
+		TLSHandshakeTimeout: 10 * time.Second,
+		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        10,
 	}
+
+	p := &Proxy{
+		CA:       ca,
+		Upstream: upstream,
+		Dialer:   &net.Dialer{Timeout: 10 * time.Second},
+		Metrics:  NewMetrics(nil),
+	}
+
+	upstream.DialContext = p.dialUpstream
 
 	p.NewTokens = func(ctx context.Context, spiffeID string, b bindings.Binding) Tokens {
 		log := slog.With("binding", b.Namespace+"/"+b.Name, "provider", ProviderName(b))
@@ -269,7 +273,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, host string, port
 	if err != nil {
 		slog.Info("CONNECT failed", "target", r.Host, "err", err)
 		http.Error(w, "waterwheel-proxy: "+err.Error(), http.StatusBadGateway)
-		p.Metrics.tunnel(r.Context(), host, port, err, time.Since(start), 0, 0)
+		p.Metrics.tunnel(r.Context(), host, port, "", err, time.Since(start), 0, 0)
 
 		return
 	}
@@ -305,7 +309,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, host string, port
 	_ = client.Close()
 	_ = upstream.Close()
 
-	p.Metrics.tunnel(r.Context(), host, port, nil, time.Since(start), sent, received)
+	p.Metrics.tunnel(r.Context(), host, port, peerAddress(upstream.RemoteAddr()), nil, time.Since(start), sent, received)
 }
 
 // hijack takes over the client connection and confirms the CONNECT.
@@ -427,6 +431,7 @@ func (p *Proxy) forwarder(rt *route, host string, port int, identity string) htt
 		r.Body = body
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		upstream := &upstreamTrace{}
 		sent := time.Now()
 
 		// Deferred, as ReverseProxy panics with http.ErrAbortHandler when the
@@ -444,7 +449,7 @@ func (p *Proxy) forwarder(rt *route, host string, port int, identity string) htt
 				err = errAborted
 			}
 
-			p.Metrics.request(ctx, b, r.Method, host, port, status, err, time.Since(sent), body.n.Load(), rec.written)
+			p.Metrics.request(ctx, b, r.Method, host, port, upstream.done(ctx), status, err, time.Since(sent), body.n.Load(), rec.written)
 
 			if aborted != nil {
 				slog.Warn("response broke off", "request", target, "identity", identity, "status", rec.status)
@@ -455,7 +460,7 @@ func (p *Proxy) forwarder(rt *route, host string, port int, identity string) htt
 				"status", rec.status, "took", time.Since(start).Round(time.Millisecond))
 		}(r.Context())
 
-		rp.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, tok)))
+		rp.ServeHTTP(rec, r.WithContext(upstream.trace(context.WithValue(r.Context(), tokenKey{}, tok))))
 	})
 }
 

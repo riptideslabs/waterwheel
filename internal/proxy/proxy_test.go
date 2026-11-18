@@ -144,7 +144,14 @@ func newSetup(t *testing.T, tokens proxy.Tokens, configure ...func(*proxy.Proxy)
 
 	s.proxy = proxy.New(ca, proxy.TokenFiles(t.TempDir()))
 	// The proxy trusts the bound test server's certificate upstream.
-	s.proxy.Upstream = s.bound.Client().Transport
+	upstream, ok := s.proxy.Upstream.(*http.Transport)
+	bound, boundOK := s.bound.Client().Transport.(*http.Transport)
+
+	if !ok || !boundOK {
+		t.Fatal("not an http.Transport")
+	}
+
+	upstream.TLSClientConfig = bound.TLSClientConfig.Clone()
 	s.proxy.NewTokens = func(context.Context, string, bindings.Binding) proxy.Tokens {
 		s.starts.Add(1)
 
