@@ -105,9 +105,10 @@ func (c *upstreamConn) Close() error {
 			}
 
 			c.metrics.connection(context.Background(), c, state, -1)
+			// Only a connection that carried a request was established; one
+			// whose TLS or HTTP setup failed wasn't.
+			c.metrics.connectionClosed(context.Background(), c, time.Since(c.opened))
 		}
-
-		c.metrics.connectionClosed(context.Background(), c, time.Since(c.opened))
 	}
 
 	c.mu.Unlock()

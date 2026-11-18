@@ -46,7 +46,8 @@ Attributes:
 - `http.request.method`, `http.response.status_code`, `url.scheme`: the HTTP
   conventions'. A method they don't know is `_OTHER`.
 - `network.protocol.name`, `network.protocol.version`: `http`, and `1.1` or
-  `2`, as the proxy spoke it upstream.
+  `2`, as the proxy spoke it upstream. Connections carry only the version, as
+  the HTTP conventions define them.
 - `http.connection.state`: `active` or `idle`, on open connections.
 - `server.address`, `server.port`: the destination the app asked for.
 - `network.peer.address`: the IP address the proxy connected to for it, on
