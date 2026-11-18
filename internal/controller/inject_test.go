@@ -202,3 +202,57 @@ func TestMutateExtraRoots(t *testing.T) {
 		t.Error("the sidecar didn't get the extra roots")
 	}
 }
+
+// The sidecar gets the extra environment, such as what turns on its metrics,
+// and the pod's name and namespace for their resource, but extra environment
+// can't override what the sidecar needs.
+func TestMutateProxyEnv(t *testing.T) {
+	t.Parallel()
+
+	inj := newInjector(t)
+	inj.ProxyEnv = []corev1.EnvVar{
+		{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://collector:4318"},
+		{Name: "WATERWHEEL_CONTROLLER_CA", Value: "not the controller's"},
+		// Only the spire source sets these, which this injector doesn't use.
+		{Name: "WATERWHEEL_IDENTITY_SOURCE", Value: "spire"},
+		{Name: "SPIFFE_ENDPOINT_SOCKET", Value: "unix:///elsewhere.sock"},
+	}
+
+	pod := appPod(nil)
+	if err := inj.Mutate(t.Context(), namespace, pod); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]corev1.EnvVar{}
+	for _, e := range pod.Spec.InitContainers[0].Env {
+		if _, dup := env[e.Name]; dup {
+			t.Errorf("%s is set twice", e.Name)
+		}
+
+		env[e.Name] = e
+	}
+
+	if env["OTEL_EXPORTER_OTLP_ENDPOINT"].Value != "http://collector:4318" {
+		t.Error("the sidecar didn't get the extra environment")
+	}
+
+	if env["WATERWHEEL_CONTROLLER_CA"].Value != "CA" {
+		t.Error("extra environment overrode the controller's CA")
+	}
+
+	for _, name := range []string{"WATERWHEEL_IDENTITY_SOURCE", "SPIFFE_ENDPOINT_SOCKET"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("extra environment set %s", name)
+		}
+	}
+
+	for name, field := range map[string]string{"POD_NAME": "metadata.name", "POD_NAMESPACE": "metadata.namespace"} {
+		if e := env[name]; e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != field {
+			t.Errorf("%s isn't from %s", name, field)
+		}
+	}
+
+	if slices.ContainsFunc(pod.Spec.Containers[0].Env, func(e corev1.EnvVar) bool { return e.Name == "OTEL_EXPORTER_OTLP_ENDPOINT" }) {
+		t.Error("the app got the sidecar's extra environment")
+	}
+}

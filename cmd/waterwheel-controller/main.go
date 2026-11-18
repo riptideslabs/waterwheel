@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -54,6 +55,7 @@ type config struct {
 	proxyImage     string
 	pullPolicy     string
 	tokenTTL       int64
+	proxyEnv       string
 }
 
 func main() {
@@ -73,6 +75,7 @@ func main() {
 	flag.StringVar(&cfg.proxyImage, "proxy-image", "waterwheel-proxy:dev", "image of the injected sidecar")
 	flag.StringVar(&cfg.pullPolicy, "proxy-pull-policy", string(corev1.PullIfNotPresent), "pull policy of the injected sidecar")
 	flag.Int64Var(&cfg.tokenTTL, "token-ttl", 3600, "lifetime of the sidecar's projected tokens, in seconds")
+	flag.StringVar(&cfg.proxyEnv, "proxy-env", "", "extra environment of the injected sidecar, a JSON list of Kubernetes EnvVars")
 	flag.Parse()
 
 	if err := run(cfg); err != nil {
@@ -91,6 +94,11 @@ func run(cfg config) error {
 		return errors.New("the spire identity source needs --trust-domain")
 	case !spire && cfg.source != "serviceAccountToken":
 		return fmt.Errorf("unknown --identity-source %q", cfg.source)
+	}
+
+	proxyEnv, err := parseProxyEnv(cfg.proxyEnv)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -156,6 +164,7 @@ func run(cfg config) error {
 		ControllerCA:    serving.CAPEM,
 		TokenTTL:        cfg.tokenTTL,
 		ConfigMaps:      mgr.GetAPIReader(),
+		ProxyEnv:        proxyEnv,
 	}
 
 	if spire {
@@ -256,4 +265,25 @@ func notifyOnChange(ctx context.Context, c cache.Cache, b *controller.Broadcaste
 	}
 
 	return nil
+}
+
+// parseProxyEnv reads --proxy-env, a JSON list of EnvVars, refusing the
+// sidecar's own configuration.
+func parseProxyEnv(raw string) ([]corev1.EnvVar, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	var env []corev1.EnvVar
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, fmt.Errorf("--proxy-env: %w", err)
+	}
+
+	for _, e := range env {
+		if controller.ReservedProxyEnv(e.Name) {
+			return nil, fmt.Errorf("--proxy-env: %s is Waterwheel's own configuration", e.Name)
+		}
+	}
+
+	return env, nil
 }

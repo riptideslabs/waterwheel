@@ -102,6 +102,10 @@ type Injector struct {
 	// CSIDriver is set with the spire source: the SPIFFE CSI driver that
 	// mounts the SPIRE agent's socket.
 	CSIDriver string
+	// ProxyEnv is extra environment for the sidecar, such as the OTEL_*
+	// variables that turn on its metrics. It can't set ReservedProxyEnv, nor
+	// override what the sidecar is given.
+	ProxyEnv []corev1.EnvVar
 }
 
 // ExtraRootsConfigMap holds CAs (key ca.crt) that both the proxy, upstream,
@@ -255,6 +259,17 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 		mounts = append(mounts, corev1.VolumeMount{Name: workloadAPIVolume, MountPath: WorkloadAPIDir, ReadOnly: true})
 	}
 
+	// The pod, for the resource of the sidecar's metrics.
+	env = append(env,
+		corev1.EnvVar{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+		corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
+
+	for _, e := range i.ProxyEnv {
+		if !ReservedProxyEnv(e.Name) && !slices.ContainsFunc(env, func(have corev1.EnvVar) bool { return have.Name == e.Name }) {
+			env = append(env, e)
+		}
+	}
+
 	// A native sidecar: it starts, and passes its startup probe (CA bundle
 	// written, listening), before the app containers start.
 	return corev1.Container{
@@ -323,6 +338,13 @@ func (i *Injector) volumes(auds []string) []corev1.Volume {
 func hasContainer(pod *corev1.Pod, name string) bool {
 	return slices.ContainsFunc(append(pod.Spec.InitContainers, pod.Spec.Containers...),
 		func(c corev1.Container) bool { return c.Name == name })
+}
+
+// ReservedProxyEnv is whether the sidecar reads name as its own
+// configuration, which only the injector sets: the WATERWHEEL_* variables and
+// SPIFFE_ENDPOINT_SOCKET, set or not depending on the identity source.
+func ReservedProxyEnv(name string) bool {
+	return strings.HasPrefix(name, "WATERWHEEL_") || name == "SPIFFE_ENDPOINT_SOCKET"
 }
 
 func hasEnv(c *corev1.Container, name string) bool {

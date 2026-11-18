@@ -30,6 +30,14 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+proxy:
+  # Extra environment for the injected waterwheel-proxy. Its metrics are off
+  # until an OTLP endpoint is set here, with the standard OpenTelemetry
+  # variables; see docs/metrics.md.
+  env: []
+  # - name: OTEL_EXPORTER_OTLP_ENDPOINT
+  #   value: http://otel-collector.observability:4318
+
 controller:
   resources:
     requests:

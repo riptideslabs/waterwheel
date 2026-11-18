@@ -54,6 +54,14 @@ func echo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/v1/broken" {
+		// Half a response, then the stream is cut.
+		_, _ = w.Write([]byte(`{"partial":`))
+		_ = http.NewResponseController(w).Flush()
+
+		panic(http.ErrAbortHandler)
+	}
+
 	err := json.NewEncoder(w).Encode(map[string]string{
 		"authorization": r.Header.Get("Authorization"),
 		"x-api-key":     r.Header.Get("X-Api-Key"),
@@ -116,8 +124,9 @@ type setup struct {
 
 // newSetup runs a proxy with two upstream servers: bound gets the binding's
 // token, other is passed through. Like the providers' APIs, bound offers
-// HTTP/2, which the proxy prefers.
-func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
+// HTTP/2, which the proxy prefers. configure changes the proxy before it
+// serves.
+func newSetup(t *testing.T, tokens proxy.Tokens, configure ...func(*proxy.Proxy)) *setup {
 	t.Helper()
 
 	s := &setup{}
@@ -135,11 +144,22 @@ func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
 
 	s.proxy = proxy.New(ca, proxy.TokenFiles(t.TempDir()))
 	// The proxy trusts the bound test server's certificate upstream.
-	s.proxy.Upstream = s.bound.Client().Transport
+	upstream, ok := s.proxy.Upstream.(*http.Transport)
+	bound, boundOK := s.bound.Client().Transport.(*http.Transport)
+
+	if !ok || !boundOK {
+		t.Fatal("not an http.Transport")
+	}
+
+	upstream.TLSClientConfig = bound.TLSClientConfig.Clone()
 	s.proxy.NewTokens = func(context.Context, string, bindings.Binding) proxy.Tokens {
 		s.starts.Add(1)
 
 		return tokens
+	}
+
+	for _, c := range configure {
+		c(s.proxy)
 	}
 
 	p := httptest.NewServer(s.proxy)
