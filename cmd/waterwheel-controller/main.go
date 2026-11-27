@@ -44,6 +44,7 @@ type config struct {
 	source         string
 	trustDomain    string
 	spireClassName string
+	clusterDomain  string
 	csiDriver      string
 	issuer         string
 	namespace      string
@@ -64,6 +65,7 @@ func main() {
 	flag.StringVar(&cfg.trustDomain, "trust-domain", "", "spire and waterwheel sources: SPIFFE trust domain, e.g. example.org")
 	flag.StringVar(&cfg.spireClassName, "spire-class-name", "spire-server-spire", "spire source: className of the ClusterSPIFFEIDs Waterwheel writes")
 	flag.StringVar(&cfg.csiDriver, "spiffe-csi-driver", "csi.spiffe.io", "spire source: the CSI driver that mounts the SPIRE agent's socket")
+	flag.StringVar(&cfg.clusterDomain, "cluster-domain", "cluster.local", "the cluster's DNS domain; X.509-SVID DNS names must be under a namespace's own Services")
 	flag.StringVar(&cfg.issuer, "issuer", "", "waterwheel source: iss claim of JWT-SVIDs; the OIDC discovery URL")
 	flag.StringVar(&cfg.namespace, "namespace", cmp.Or(os.Getenv("POD_NAMESPACE"), "waterwheel-system"), "Waterwheel's own namespace; its bindings apply to any namespace")
 	flag.StringVar(&cfg.serviceName, "service-name", "waterwheel-controller", "the controller's Service, for its serving certificate")
@@ -176,7 +178,7 @@ func run(cfg config) error {
 
 	recorder := mgr.GetEventRecorder("waterwheel-controller")
 	// Shared, so the identities in effect are worked out once per change.
-	identities := &identity.Builder{SystemNamespace: cfg.namespace}
+	identities := &identity.Builder{SystemNamespace: cfg.namespace, ClusterDomain: cfg.clusterDomain}
 
 	api := &controller.API{
 		Auth:            &controller.TokenReviewer{Client: direct, Pods: mgr.GetAPIReader()},

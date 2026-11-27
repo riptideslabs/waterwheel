@@ -66,6 +66,9 @@ type X509Properties struct {
 	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('10m') && duration(self) <= duration('24h')",message="must be between 10m and 24h"
 	TTL *metav1.Duration `json:"ttl,omitempty"`
 
+	// DNSNames of the X.509-SVID. Outside the Waterwheel namespace they must
+	// end with .<namespace>.svc or .<namespace>.svc.<cluster domain>.
+	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=100
 	// +listType=set

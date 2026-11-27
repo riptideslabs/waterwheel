@@ -146,6 +146,7 @@ spec:
         - --identity-source={{ $source }}
         - --proxy-image={{ include "waterwheel.image" (dict "root" . "name" "waterwheel-proxy") }}
         - --proxy-pull-policy={{ .Values.image.pullPolicy }}
+        - --cluster-domain={{ .Values.clusterDomain }}
         {{- if ne $source "serviceAccountToken" }}
         - --trust-domain={{ required "set trustDomain" .Values.trustDomain }}
         {{- end }}

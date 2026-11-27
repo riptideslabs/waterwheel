@@ -1,6 +1,7 @@
 # Namespaces are the trust boundary: outside {{ .Release.Namespace }}, an
 # identity or binding may only use SPIFFE IDs under ns/<its namespace>/, and an
-# identity may only select pods in its own namespace. The agent and the
+# identity may only select pods in its own namespace and put DNS names of its
+# own namespace's Services into X.509-SVIDs. The agent and the
 # controller enforce the same rules again, so deleting this policy doesn't
 # open the boundary.
 apiVersion: admissionregistration.k8s.io/v1
@@ -21,6 +22,8 @@ spec:
     expression: "request.namespace == '{{ .Release.Namespace }}'"
   - name: id
     expression: "object.spec.workloadID"
+  - name: svc
+    expression: "'.' + request.namespace + '.svc'"
   validations:
   - expression: "!variables.id.startsWith('waterwheel/')"
     message: "workloadID: the waterwheel/ prefix is reserved for Waterwheel's own identities"
@@ -30,6 +33,11 @@ spec:
       variables.system || !has(object.spec.selectors) ||
       object.spec.selectors.all(s, !('k8s:pod:namespace' in s) || string(s['k8s:pod:namespace']) == request.namespace)
     messageExpression: "'selectors may only match pods in namespace ' + request.namespace"
+  - expression: >-
+      variables.system || !has(object.spec.svid) || !has(object.spec.svid.x509) ||
+      !has(object.spec.svid.x509.dnsNames) || object.spec.svid.x509.dnsNames.all(d,
+      d.lowerAscii().endsWith(variables.svc) || d.lowerAscii().endsWith(variables.svc + '.{{ .Values.clusterDomain }}'))
+    messageExpression: "'svid.x509.dnsNames must end with ' + variables.svc + ' or ' + variables.svc + '.{{ .Values.clusterDomain }}'"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -88,6 +88,9 @@ spec:
                   x509:
                     properties:
                       dnsNames:
+                        description: |-
+                          DNSNames of the X.509-SVID. Outside the Waterwheel namespace they must
+                          end with .<namespace>.svc or .<namespace>.svc.<cluster domain>.
                         items:
                           type: string
                         maxItems: 100

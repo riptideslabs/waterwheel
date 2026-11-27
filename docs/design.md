@@ -198,6 +198,8 @@ source doesn't exist, show up as status conditions rather than rejections.
 
 - A `CredentialBinding` or `WorkloadIdentity` in namespace `N` must have a
   `workloadID` starting with `ns/N/`.
+- A `WorkloadIdentity` in `N` may put only DNS names of `N`'s Services
+  (`*.N.svc`, `*.N.svc.<cluster domain>`) into its X.509-SVIDs.
 - A `CredentialBinding` in `N` uses a `CredentialSource` from `N`.
 - Objects in `waterwheel-system` may use any ID. Only cluster admins should be able
   to write there.

@@ -44,6 +44,7 @@ const (
 	ReasonReservedWorkloadID  = "ReservedWorkloadID"
 	ReasonForeignWorkloadID   = "ForeignWorkloadID"
 	ReasonForeignNamespace    = "ForeignNamespace"
+	ReasonForeignDNSName      = "ForeignDNSName"
 	ReasonUnsupportedSelector = "UnsupportedSelector"
 	ReasonInvalidSelector     = "InvalidSelector"
 	ReasonSelectorsOverlap    = "SelectorsOverlap"
@@ -140,6 +141,7 @@ type Set struct {
 	Shadowed map[types.NamespacedName][]types.NamespacedName
 
 	systemNamespace string
+	clusterDomain   string
 	// compared counts the pairs of entries Build compared key by key.
 	compared int
 }
@@ -154,6 +156,8 @@ func Build(wids []v1alpha1.WorkloadIdentity, systemNamespace string) *Set {
 // stay the same: every bindings request needs the Set, and few change it.
 type Builder struct {
 	SystemNamespace string
+	// ClusterDomain is the cluster's DNS domain; cluster.local if empty.
+	ClusterDomain string
 
 	mu   sync.Mutex
 	key  [sha256.Size]byte
@@ -202,6 +206,7 @@ func (b *Builder) build(wids []v1alpha1.WorkloadIdentity) *Set {
 		Problems:        map[types.NamespacedName]Problem{},
 		Shadowed:        map[types.NamespacedName][]types.NamespacedName{},
 		systemNamespace: b.SystemNamespace,
+		clusterDomain:   cmp.Or(b.ClusterDomain, "cluster.local"),
 	}
 
 	sorted := slices.Clone(wids)
@@ -254,6 +259,10 @@ func (s *Set) parse(w *v1alpha1.WorkloadIdentity) (*Identity, *Problem) {
 		return nil, &Problem{ReasonForeignWorkloadID, "workloadID must start with ns/" + w.Namespace + "/"}
 	}
 
+	if p := s.checkDNSNames(w); p != nil {
+		return nil, p
+	}
+
 	entries := make([]Entry, 0, len(w.Spec.Selectors))
 
 	for n, sel := range w.Spec.Selectors {
@@ -282,6 +291,27 @@ func (s *Set) parse(w *v1alpha1.WorkloadIdentity) (*Identity, *Problem) {
 
 	// A copy: the Set may outlive the objects it was built from.
 	return &Identity{Namespace: w.Namespace, Name: w.Name, WorkloadID: id, Entries: entries, SVID: w.Spec.SVID.DeepCopy()}, nil
+}
+
+// checkDNSNames keeps an X.509-SVID's DNS names to the Services of the
+// identity's namespace. A certificate with another namespace's Service name
+// would pass for that Service wherever the trust bundle is trusted.
+func (s *Set) checkDNSNames(w *v1alpha1.WorkloadIdentity) *Problem {
+	if w.Namespace == s.systemNamespace || w.Spec.SVID == nil || w.Spec.SVID.X509 == nil {
+		return nil
+	}
+
+	svc := "." + w.Namespace + ".svc"
+
+	for _, d := range w.Spec.SVID.X509.DNSNames {
+		name := strings.ToLower(d)
+		if !strings.HasSuffix(name, svc) && !strings.HasSuffix(name, svc+"."+s.clusterDomain) {
+			return &Problem{ReasonForeignDNSName, fmt.Sprintf(
+				"svid.x509.dnsNames must end with %s or %s.%s, unlike %s", svc, svc, s.clusterDomain, d)}
+		}
+	}
+
+	return nil
 }
 
 func checkKey(key, value string) *Problem {
