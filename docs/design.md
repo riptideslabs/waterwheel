@@ -167,10 +167,9 @@ field names wherever the two overlap, so they can be merged later.
   - `azure` presents the subject token as the client assertion of an Entra ID
     app or managed identity, and gets a token for one scope. Its audience
     defaults to `api://AzureADTokenExchange`.
-  - Waterwheel currently uses tokenex v0.7.0, which sends `rfc8693` requests
-    as JSON. OpenAI and JSON-accepting token endpoints work; endpoints that
-    require RFC 8693 form encoding need a later tokenex release and a
-    Waterwheel dependency update.
+  - Waterwheel sends `rfc8693` requests as JSON. OpenAI and JSON-accepting
+    token endpoints work; endpoints that require RFC 8693 form encoding need
+    a `bodyFormat` field like `rfc7523`'s, which the API doesn't have yet.
   - There are no `idTokenClaims` or `idTokenLifetime`, because the subject
     token's claims and lifetime aren't Waterwheel's to set.
   - `aws` comes later. tokenex returns SigV4 keys rather than a token, so the
