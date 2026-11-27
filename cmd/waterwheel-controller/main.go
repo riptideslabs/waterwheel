@@ -36,6 +36,7 @@ import (
 	"go.riptides.io/waterwheel/api/v1alpha1"
 	"go.riptides.io/waterwheel/internal/certs"
 	"go.riptides.io/waterwheel/internal/controller"
+	"go.riptides.io/waterwheel/internal/identity"
 	"go.riptides.io/waterwheel/internal/version"
 )
 
@@ -174,6 +175,8 @@ func run(cfg config) error {
 	webhookCA := &controller.WebhookCA{Client: direct, Name: cfg.webhookConfig, CAPEM: serving.CAPEM}
 
 	recorder := mgr.GetEventRecorder("waterwheel-controller")
+	// Shared, so the identities in effect are worked out once per change.
+	identities := &identity.Builder{SystemNamespace: cfg.namespace}
 
 	api := &controller.API{
 		Auth:            &controller.TokenReviewer{Client: direct, Pods: mgr.GetAPIReader()},
@@ -181,6 +184,7 @@ func run(cfg config) error {
 		SystemNamespace: cfg.namespace,
 		Changes:         changes,
 		Recorder:        recorder,
+		Identities:      identities,
 	}
 
 	if spire {
@@ -200,6 +204,7 @@ func run(cfg config) error {
 		SystemNamespace:       cfg.namespace,
 		ServiceAccountIDsOnly: !spire,
 		WorkloadIdentities:    spire,
+		Identities:            identities,
 		Recorder:              recorder,
 	}
 
@@ -222,6 +227,7 @@ func run(cfg config) error {
 			SystemNamespace: cfg.namespace,
 			TrustDomain:     cfg.trustDomain,
 			ClassName:       cfg.spireClassName,
+			Identities:      identities,
 			Recorder:        recorder,
 		}
 

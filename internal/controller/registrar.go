@@ -68,6 +68,8 @@ type IdentityRegistrar struct {
 	TrustDomain     string
 	// ClassName is the spire-controller-manager class of the ClusterSPIFFEIDs.
 	ClassName string
+	// Identities, if set, keeps the identities in effect between syncs.
+	Identities *identity.Builder
 	// Recorder gets an event for each condition change.
 	Recorder events.EventRecorder
 }
@@ -107,7 +109,7 @@ func (r *IdentityRegistrar) Sync(ctx context.Context) error {
 		return err
 	}
 
-	set := identity.Build(list.Items, r.SystemNamespace)
+	set := identitySet(r.Identities, list.Items, r.SystemNamespace)
 	failed := map[types.NamespacedName]error{}
 	wanted := map[string]bool{}
 
@@ -124,6 +126,15 @@ func (r *IdentityRegistrar) Sync(ctx context.Context) error {
 	}
 
 	return errors.Join(r.prune(ctx, wanted), r.updateStatus(ctx, list.Items, set, failed))
+}
+
+// identitySet is the identities in effect, from b when there is one.
+func identitySet(b *identity.Builder, wids []v1alpha1.WorkloadIdentity, systemNamespace string) *identity.Set {
+	if b == nil {
+		return identity.Build(wids, systemNamespace)
+	}
+
+	return b.Build(wids)
 }
 
 func registrationError(err error) error {

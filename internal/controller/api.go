@@ -48,6 +48,8 @@ type API struct {
 	// TrustDomain is set with SPIFFE sources: the pod's workload ID comes
 	// from the WorkloadIdentities, rather than its service account.
 	TrustDomain string
+	// Identities, if set, keeps the identities in effect between requests.
+	Identities *identity.Builder
 	// Recorder gets the events of reports.
 	Recorder events.EventRecorder
 	// ReportTimeout bounds how long a report may take to arrive; 10 seconds if zero.
@@ -176,7 +178,7 @@ func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, erro
 		return bindings.Snapshot{}, err
 	}
 
-	id, reason := resolve(identity.Build(wids.Items, a.SystemNamespace), c)
+	id, reason := resolve(identitySet(a.Identities, wids.Items, a.SystemNamespace), c)
 	if reason != "" {
 		// No identity, so nothing to exchange; the proxy logs why.
 		return bindings.Snapshot{Bindings: []bindings.Binding{}, Reason: reason}, nil

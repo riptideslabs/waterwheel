@@ -46,6 +46,8 @@ type BindingStatus struct {
 	// WorkloadIdentities is set with SPIFFE sources: a binding applies to the
 	// pods of a WorkloadIdentity in effect with its workloadID.
 	WorkloadIdentities bool
+	// Identities, if set, keeps the identities in effect between reconciles.
+	Identities *identity.Builder
 	// Recorder gets an event for each condition change.
 	Recorder events.EventRecorder
 }
@@ -128,7 +130,7 @@ func (r *BindingStatus) ready(ctx context.Context, b *v1alpha1.CredentialBinding
 			return metav1.Condition{Type: ConditionReady, Status: metav1.ConditionUnknown, Reason: "ListFailed", Message: err.Error()}, ""
 		}
 
-		if !identity.Build(wids.Items, r.SystemNamespace).Has(b.Namespace, b.Spec.WorkloadID) {
+		if !identitySet(r.Identities, wids.Items, r.SystemNamespace).Has(b.Namespace, b.Spec.WorkloadID) {
 			return notReady("NoWorkloadIdentity", "no WorkloadIdentity in effect gives pods "+b.Spec.WorkloadID), ""
 		}
 	}
