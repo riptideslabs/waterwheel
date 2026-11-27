@@ -77,6 +77,8 @@ Java apps don't pick up the sidecar's CA yet; `make e2e-trust` checks the CA
 bundle in Debian, Ubuntu, Fedora, UBI, Amazon Linux, SUSE and distroless images.
 A container that already sets `SSL_CERT_FILE` (or a similar variable) or mounts
 its own CA bundle keeps it, so it won't trust the proxy.
+Pods with `hostNetwork: true` are not injected: the proxy would listen on the
+node's loopback.
 The injection webhook answers anyone who can reach its port. The chart's
 `networkPolicy` values limit it to the API server, and the bindings API to
 namespaces with injection enabled.

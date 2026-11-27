@@ -120,6 +120,13 @@ func (i *Injector) Handle(ctx context.Context, req admission.Request) admission.
 		return admission.Allowed("opted out")
 	case pod.Annotations[AnnotationInjected] == strTrue || hasContainer(pod, SidecarName):
 		return admission.Allowed("already injected")
+	case pod.Spec.HostNetwork:
+		// Its loopback is the node's: the proxy would give the pod's
+		// credentials to every process on the node.
+		slog.Info("not injecting a hostNetwork pod", "namespace", req.Namespace, "pod", cmp.Or(pod.Name, pod.GenerateName+"…"))
+
+		return admission.Allowed("hostNetwork pods are not injected").
+			WithWarnings("waterwheel: not injecting " + SidecarName + " into a hostNetwork pod")
 	}
 
 	if err := i.Mutate(ctx, req.Namespace, pod); err != nil {

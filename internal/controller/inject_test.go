@@ -202,3 +202,27 @@ func TestMutateExtraRoots(t *testing.T) {
 		t.Error("the sidecar didn't get the extra roots")
 	}
 }
+
+// A hostNetwork pod's loopback is the node's, so the proxy would serve every
+// process on the node.
+func TestHandleSkipsHostNetwork(t *testing.T) {
+	t.Parallel()
+
+	pod := appPod(nil)
+	pod.Spec.HostNetwork = true
+
+	raw, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := newInjector(t).Handle(t.Context(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Namespace: namespace,
+		Object:    runtime.RawExtension{Raw: raw},
+	}})
+
+	if !resp.Allowed || len(resp.Patches) > 0 || len(resp.Warnings) == 0 {
+		t.Errorf("allowed = %v, %d patches, warnings %v; want the pod let through as it is, with a warning",
+			resp.Allowed, len(resp.Patches), resp.Warnings)
+	}
+}
