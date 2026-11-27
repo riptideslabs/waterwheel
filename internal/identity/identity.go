@@ -316,7 +316,14 @@ func (s *Set) checkDNSNames(w *v1alpha1.WorkloadIdentity) *Problem {
 
 func checkKey(key, value string) *Problem {
 	switch {
-	case key == KeyNamespace || key == KeyPodName || key == KeyServiceAccount:
+	case key == KeyNamespace:
+		return nil
+	case key == KeyPodName || key == KeyServiceAccount:
+		// Only a name can match one, and SPIRE reads these values as templates.
+		if errs := validation.IsDNS1123Subdomain(value); len(errs) > 0 {
+			return &Problem{ReasonInvalidSelector, fmt.Sprintf("%s=%q: %s", key, value, strings.Join(errs, "; "))}
+		}
+
 		return nil
 	case strings.HasPrefix(key, KeyLabelPrefix):
 		label := strings.TrimPrefix(key, KeyLabelPrefix)

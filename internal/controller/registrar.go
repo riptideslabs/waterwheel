@@ -261,9 +261,9 @@ func (r *IdentityRegistrar) ClusterSPIFFEIDs(id *identity.Identity) []*unstructu
 			switch k {
 			case identity.KeyNamespace:
 			case identity.KeyPodName:
-				workload = append(workload, "k8s:pod-name:"+v)
+				workload = append(workload, "k8s:pod-name:"+literal(v))
 			case identity.KeyServiceAccount:
-				workload = append(workload, "k8s:sa:"+v)
+				workload = append(workload, "k8s:sa:"+literal(v))
 			default:
 				podLabels[strings.TrimPrefix(k, identity.KeyLabelPrefix)] = v
 			}
@@ -273,7 +273,7 @@ func (r *IdentityRegistrar) ClusterSPIFFEIDs(id *identity.Identity) []*unstructu
 
 		spec := map[string]any{
 			"className":                 r.ClassName,
-			"spiffeIDTemplate":          "spiffe://{{ .TrustDomain }}/" + id.WorkloadID,
+			"spiffeIDTemplate":          "spiffe://{{ .TrustDomain }}/" + literal(id.WorkloadID),
 			"workloadSelectorTemplates": toAny(workload),
 		}
 
@@ -322,14 +322,19 @@ func svidProperties(spec map[string]any, p *v1alpha1.SVIDProperties) {
 	}
 
 	if len(p.X509.DNSNames) > 0 {
-		// They are templates to the controller manager; keep them literal.
 		names := make([]string, 0, len(p.X509.DNSNames))
 		for _, d := range p.X509.DNSNames {
-			names = append(names, strings.ReplaceAll(d, "{{", "{{`{{`}}"))
+			names = append(names, literal(d))
 		}
 
 		spec["dnsNameTemplates"] = toAny(names)
 	}
+}
+
+// literal keeps a value as it is in a field the controller manager reads as
+// a template: {{ .PodMeta.Name }} as a pod name would match every pod.
+func literal(v string) string {
+	return strings.ReplaceAll(v, "{{", "{{`{{`}}")
 }
 
 // clusterSPIFFEIDName is waterwheel.<namespace>.<name>.<entry>. Namespaces
