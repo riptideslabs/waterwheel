@@ -226,3 +226,27 @@ func TestHandleSkipsHostNetwork(t *testing.T) {
 			resp.Allowed, len(resp.Patches), resp.Warnings)
 	}
 }
+
+// Namespaces that enforce the restricted Pod Security Standard reject a
+// container without a seccomp profile.
+func TestSidecarMeetsRestricted(t *testing.T) {
+	t.Parallel()
+
+	pod := appPod(nil)
+	if err := newInjector(t).Mutate(t.Context(), namespace, pod); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := pod.Spec.InitContainers[0].SecurityContext
+
+	switch {
+	case sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault:
+		t.Errorf("seccompProfile = %v; want RuntimeDefault", sc.SeccompProfile)
+	case sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot:
+		t.Error("runAsNonRoot isn't set")
+	case sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation:
+		t.Error("allowPrivilegeEscalation isn't false")
+	case len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL":
+		t.Errorf("capabilities dropped: %v", sc.Capabilities.Drop)
+	}
+}

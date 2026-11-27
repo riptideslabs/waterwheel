@@ -289,6 +289,8 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 			ReadOnlyRootFilesystem:   new(true),
 			AllowPrivilegeEscalation: new(false),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			// With it, the sidecar meets the restricted Pod Security Standard.
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		VolumeMounts: mounts,
 	}
