@@ -5,5 +5,6 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 
 {{- define "waterwheel.image" -}}
-{{ .root.Values.image.registry }}{{ .name }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+{{- $digest := get .root.Values.image.digests (trimPrefix "waterwheel-" .name) -}}
+{{ .root.Values.image.registry }}{{ .name }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}{{ with $digest }}@{{ . }}{{ end }}
 {{- end }}

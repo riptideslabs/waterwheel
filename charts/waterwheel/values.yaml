@@ -32,6 +32,11 @@ image:
   registry: ghcr.io/riptideslabs/
   # The chart's appVersion if empty: the images of the release the chart is from.
   tag: ""
+  # Pin an image's content by digest (sha256:...): a tag can be pushed again.
+  digests:
+    controller: ""
+    proxy: ""
+    agent: ""
   pullPolicy: IfNotPresent
 
 controller:

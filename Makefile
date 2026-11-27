@@ -6,6 +6,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 BINS := waterwheel-agent waterwheel-controller waterwheel-proxy
 DIST_ARCHES := amd64 arm64
 CHART_VALUES := --set trustDomain=waterwheel.test --set issuer=https://oidc.waterwheel.test
+CHART_DIGEST := sha256:0000000000000000000000000000000000000000000000000000000000000000
 
 .PHONY: help generate check-generate build dist test vet lint chart shellcheck check \
 	vm cluster images deploy dev api-check e2e e2e-setup e2e-reset e2e-trust demo down vm-delete site site-build
@@ -44,7 +45,8 @@ chart: ## helm lint, and render the chart for each identity source
 	helm lint charts/waterwheel $(CHART_VALUES)
 	helm template waterwheel charts/waterwheel >/dev/null
 	helm template waterwheel charts/waterwheel $(CHART_VALUES) --set identity.source=spire \
-		--set networkPolicy.enabled=true --set 'networkPolicy.webhookFrom[0].ipBlock.cidr=10.0.0.0/24' >/dev/null
+		--set networkPolicy.enabled=true --set 'networkPolicy.webhookFrom[0].ipBlock.cidr=10.0.0.0/24' \
+		--set image.digests.proxy=$(CHART_DIGEST) >/dev/null
 	helm template waterwheel charts/waterwheel $(CHART_VALUES) --set identity.source=waterwheel \
 		--set issuer=https://oidc.example.com --set oidc.ingress.enabled=true --set oidc.ingress.host=oidc.example.com >/dev/null
 
