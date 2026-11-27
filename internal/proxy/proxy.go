@@ -84,7 +84,7 @@ func New(ca *CA, subjects Subjects) *Proxy {
 			return failed{err}
 		}
 
-		c := newCredentials(b, subject, log, p.report)
+		c := newCredentials(ctx.Done(), b, subject, log, p.report)
 
 		go c.run(ctx)
 

@@ -46,21 +46,25 @@ type credentials struct {
 	log     *slog.Logger
 	report  func(bindings.Report)
 	started time.Time
+	// done is closed when the route ends: the binding was removed or changed.
+	// Connections intercepted before that still ask here, and from that moment
+	// none of them gets the token.
+	done <-chan struct{}
 
 	mu       sync.Mutex
 	access   string
 	expiry   time.Time
 	lastErr  error
-	stopped  bool          // the route is gone
 	reported string        // the last report's reason and, for a failure, its error
 	changed  chan struct{} // closed and replaced on every result
 	kick     chan struct{}
 }
 
-func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
+func newCredentials(done <-chan struct{}, b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
 	report func(bindings.Report),
 ) *credentials {
 	return &credentials{
+		done:    done,
 		binding: b,
 		subject: subject,
 		log:     log,
@@ -72,10 +76,6 @@ func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log
 }
 
 func (c *credentials) run(ctx context.Context) {
-	// ctx ends when the binding is removed or changed. Connections intercepted
-	// before that still ask here, and must not get its token any longer.
-	context.AfterFunc(ctx, c.stop)
-
 	backoff := 2 * time.Second
 	tokenexLog := logr.FromSlogHandler(c.log.Handler())
 
@@ -121,13 +121,14 @@ func (c *credentials) run(ctx context.Context) {
 	}
 }
 
-func (c *credentials) stop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.stopped, c.access = true, ""
-	close(c.changed)
-	c.changed = make(chan struct{})
+// ended reports whether the route is gone.
+func (c *credentials) ended() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // gone reports whether err is of credentials whose binding was removed or changed.
@@ -168,7 +169,7 @@ func (c *credentials) set(access string, expiry time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.stopped {
+	if c.ended() {
 		return
 	}
 
@@ -231,7 +232,7 @@ func (c *credentials) valid() (string, bool) {
 // returns that attempt's result.
 func (c *credentials) Get(ctx context.Context) (string, error) {
 	c.mu.Lock()
-	if c.stopped {
+	if c.ended() {
 		c.mu.Unlock()
 
 		return "", errBindingGone
@@ -253,6 +254,8 @@ func (c *credentials) Get(ctx context.Context) (string, error) {
 
 	select {
 	case <-changed:
+	case <-c.done:
+		return "", errBindingGone
 	case <-time.After(15 * time.Second):
 		return "", errExchangeTimeout
 	case <-ctx.Done():
@@ -262,7 +265,7 @@ func (c *credentials) Get(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.stopped {
+	if c.ended() {
 		return "", errBindingGone
 	}
 

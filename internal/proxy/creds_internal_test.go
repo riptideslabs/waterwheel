@@ -33,7 +33,7 @@ func reports(t *testing.T) (*credentials, *[]string) {
 
 	var got []string
 
-	c := newCredentials(b, nil, slog.New(slog.DiscardHandler), func(r bindings.Report) {
+	c := newCredentials(nil, b, nil, slog.New(slog.DiscardHandler), func(r bindings.Report) {
 		if r.Binding != "support/support-bot-anthropic" {
 			t.Errorf("report about %q", r.Binding)
 		}

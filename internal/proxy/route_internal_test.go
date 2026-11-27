@@ -43,7 +43,7 @@ func TestRemovedBindingStopsServingItsToken(t *testing.T) {
 	// Real credentials, with a token as if an exchange had delivered it. The
 	// binding names no provider, so run only waits for its route to end.
 	p.NewTokens = func(ctx context.Context, _ string, b bindings.Binding) Tokens {
-		c := newCredentials(b, nil, slog.New(slog.DiscardHandler), nil)
+		c := newCredentials(ctx.Done(), b, nil, slog.New(slog.DiscardHandler), nil)
 		c.set(token, time.Now().Add(time.Hour))
 
 		go c.run(ctx)
@@ -98,25 +98,42 @@ func TestRemovedBindingStopsServingItsToken(t *testing.T) {
 
 	p.Update(t.Context(), bindings.Snapshot{Identity: "ns/support/sa/bot"})
 
-	// The connection is still the intercepted one. The route ends a moment
-	// after the update.
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		status, body, closing := get()
-		if status == http.StatusForbidden {
-			if !closing {
-				t.Error("the proxy kept the connection of a route that is gone")
-			}
+	// The connection is still the intercepted one, and the route ended with
+	// the update: not one more request gets the token.
+	status, body, closing := get()
+	if status != http.StatusForbidden {
+		t.Fatalf("after the binding was removed: status %d, Authorization %q", status, body)
+	}
 
-			break
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("after the binding was removed: status %d, Authorization %q", status, body)
-		}
+	if !closing {
+		t.Error("the proxy kept the connection of a route that is gone")
 	}
 
 	// A new connection is passed through, with what the app sent.
 	if status, body, _ := get(); status != http.StatusOK || strings.Contains(body, token) {
 		t.Errorf("on a new connection: status %d, Authorization %q", status, body)
+	}
+}
+
+// The route ends when its context does, not a moment later: a request that
+// asks right after gets no token.
+func TestCredentialsEndWithTheirRoute(t *testing.T) {
+	t.Parallel()
+
+	for range 1000 {
+		ctx, cancel := context.WithCancel(t.Context())
+
+		c := newCredentials(ctx.Done(), bindings.Binding{}, nil, slog.New(slog.DiscardHandler), nil)
+		c.set("provider-token", time.Now().Add(time.Hour))
+
+		if tok, err := c.Get(t.Context()); err != nil || tok == "" {
+			t.Fatalf("before the route ended: %q, %v", tok, err)
+		}
+
+		cancel()
+
+		if tok, err := c.Get(t.Context()); !gone(err) {
+			t.Fatalf("after the route ended: %q, %v", tok, err)
+		}
 	}
 }
