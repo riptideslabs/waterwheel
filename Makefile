@@ -43,7 +43,8 @@ lint: vet ## go vet and golangci-lint
 chart: ## helm lint, and render the chart for each identity source
 	helm lint charts/waterwheel $(CHART_VALUES)
 	helm template waterwheel charts/waterwheel >/dev/null
-	helm template waterwheel charts/waterwheel $(CHART_VALUES) --set identity.source=spire >/dev/null
+	helm template waterwheel charts/waterwheel $(CHART_VALUES) --set identity.source=spire \
+		--set networkPolicy.enabled=true --set 'networkPolicy.webhookFrom[0].ipBlock.cidr=10.0.0.0/24' >/dev/null
 	helm template waterwheel charts/waterwheel $(CHART_VALUES) --set identity.source=waterwheel \
 		--set issuer=https://oidc.example.com --set oidc.ingress.enabled=true --set oidc.ingress.host=oidc.example.com >/dev/null
 

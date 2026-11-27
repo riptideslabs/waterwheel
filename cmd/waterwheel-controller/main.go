@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -168,12 +167,7 @@ func run(cfg config) error {
 	webhookMux := http.NewServeMux()
 	webhookMux.Handle("/inject", &admission.Webhook{Handler: injector})
 
-	webhook := &controller.TLSServer{Server: &http.Server{
-		Addr:              cfg.webhookAddr,
-		Handler:           webhookMux,
-		ReadHeaderTimeout: 10 * time.Second,
-		TLSConfig:         tlsConfig,
-	}}
+	webhook := &controller.TLSServer{Server: controller.NewWebhookServer(cfg.webhookAddr, webhookMux, tlsConfig)}
 	webhookCA := &controller.WebhookCA{Client: direct, Name: cfg.webhookConfig, CAPEM: serving.CAPEM}
 
 	recorder := mgr.GetEventRecorder("waterwheel-controller")
@@ -193,12 +187,7 @@ func run(cfg config) error {
 		api.TrustDomain = cfg.trustDomain
 	}
 
-	server := &controller.TLSServer{Server: &http.Server{
-		Addr:              cfg.apiAddr,
-		Handler:           api,
-		ReadHeaderTimeout: 10 * time.Second,
-		TLSConfig:         tlsConfig,
-	}}
+	server := &controller.TLSServer{Server: controller.NewAPIServer(cfg.apiAddr, api, tlsConfig)}
 
 	status := &controller.BindingStatus{
 		Client:                mgr.GetClient(),

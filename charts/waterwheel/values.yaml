@@ -35,10 +35,25 @@ image:
   pullPolicy: IfNotPresent
 
 controller:
+  # Every replica serves the webhook and the bindings API; one, the leader,
+  # writes status and registers identities.
+  replicas: 1
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
+    limits:
+      memory: 512Mi
+
+# Limit who reaches the controller with a NetworkPolicy; the cluster's CNI must
+# enforce them. The bindings API is then open to namespaces with injection
+# enabled, and the webhook, which answers anyone who reaches it, to webhookFrom.
+networkPolicy:
+  enabled: false
+  # Where the API server calls the webhook from, as NetworkPolicy peers. It is
+  # rarely a pod: use the control plane's addresses, or the node CIDR, e.g.
+  # [{ipBlock: {cidr: 10.0.0.0/24}}].
+  webhookFrom: []
 
 # waterwheel source only.
 agent:
