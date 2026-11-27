@@ -6,7 +6,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/go-logr/logr v1.4.4
 	github.com/spiffe/go-spiffe/v2 v2.9.0
-	go.riptides.io/tokenex v0.8.0
+	go.riptides.io/tokenex v0.9.0
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
