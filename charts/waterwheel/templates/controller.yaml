@@ -125,7 +125,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "waterwheel.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.controller.replicas }}
+  replicas: {{ .Values.controller.replicas | default 1 }}
   selector:
     matchLabels:
       app.kubernetes.io/component: controller
@@ -148,7 +148,7 @@ spec:
         - --identity-source={{ $source }}
         - --proxy-image={{ include "waterwheel.image" (dict "root" . "name" "waterwheel-proxy") }}
         - --proxy-pull-policy={{ .Values.image.pullPolicy }}
-        - --cluster-domain={{ .Values.clusterDomain }}
+        - --cluster-domain={{ .Values.clusterDomain | default "cluster.local" }}
         {{- if ne $source "serviceAccountToken" }}
         - --trust-domain={{ required "set trustDomain" .Values.trustDomain }}
         {{- end }}
