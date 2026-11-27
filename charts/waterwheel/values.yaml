@@ -9,8 +9,9 @@ identity:
 # trust domain must match SPIRE's.
 trustDomain: ""
 
-# The cluster's DNS domain. Outside Waterwheel's namespace, the DNS names of an
-# X.509-SVID must end with .<namespace>.svc or .<namespace>.svc.<clusterDomain>.
+# The cluster's DNS domain. Its Services bypass the proxy, and outside
+# Waterwheel's namespace the DNS names of an X.509-SVID must end with
+# .<namespace>.svc or .<namespace>.svc.<clusterDomain>.
 clusterDomain: cluster.local
 
 # spire source only.

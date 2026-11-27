@@ -203,6 +203,38 @@ func TestMutateExtraRoots(t *testing.T) {
 	}
 }
 
+// Services under the cluster's own DNS domain bypass the proxy, as those under
+// cluster.local do.
+func TestMutateNoProxy(t *testing.T) {
+	t.Parallel()
+
+	for domain, want := range map[string]string{
+		"":              "localhost,127.0.0.1,.svc,.cluster.local",
+		"cluster.local": "localhost,127.0.0.1,.svc,.cluster.local",
+		"corp.example":  "localhost,127.0.0.1,.svc,.cluster.local,.svc.corp.example",
+	} {
+		inj := newInjector(t)
+		inj.ClusterDomain = domain
+
+		pod := appPod(nil)
+		if err := inj.Mutate(t.Context(), namespace, pod); err != nil {
+			t.Fatal(err)
+		}
+
+		got := ""
+
+		for _, e := range pod.Spec.Containers[0].Env {
+			if e.Name == "NO_PROXY" {
+				got = e.Value
+			}
+		}
+
+		if got != want {
+			t.Errorf("cluster domain %q: NO_PROXY = %q; want %q", domain, got, want)
+		}
+	}
+}
+
 // A hostNetwork pod's loopback is the node's, so the proxy would serve every
 // process on the node.
 func TestHandleSkipsHostNetwork(t *testing.T) {

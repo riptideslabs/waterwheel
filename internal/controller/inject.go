@@ -102,6 +102,20 @@ type Injector struct {
 	// CSIDriver is set with the spire source: the SPIFFE CSI driver that
 	// mounts the SPIRE agent's socket.
 	CSIDriver string
+	// ClusterDomain is the cluster's DNS domain; cluster.local if empty.
+	ClusterDomain string
+}
+
+// noProxy keeps traffic inside the cluster off the proxy. Only the Services of
+// another cluster domain are added: a provider may be under the same domain.
+func (i *Injector) noProxy() string {
+	hosts := "localhost,127.0.0.1,.svc,.cluster.local"
+
+	if d := strings.Trim(i.ClusterDomain, "."); d != "" && d != "cluster.local" {
+		hosts += ",.svc." + d
+	}
+
+	return hosts
 }
 
 // ExtraRootsConfigMap holds CAs (key ca.crt) that both the proxy, upstream,
@@ -172,7 +186,7 @@ func (i *Injector) Mutate(ctx context.Context, namespace string, pod *corev1.Pod
 	bundle := BundleDir + "/" + BundleFile
 	env := []corev1.EnvVar{
 		{Name: "HTTPS_PROXY", Value: "http://" + ProxyAddr},
-		{Name: "NO_PROXY", Value: "localhost,127.0.0.1,.svc,.cluster.local"},
+		{Name: "NO_PROXY", Value: i.noProxy()},
 	}
 
 	for _, name := range bundleEnv {
