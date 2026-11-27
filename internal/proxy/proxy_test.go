@@ -112,6 +112,9 @@ type setup struct {
 	bound  *httptest.Server
 	other  *httptest.Server
 	starts atomic.Int32
+	// addr is the proxy's address, and roots what the app trusts.
+	addr  string
+	roots *x509.CertPool
 }
 
 // newSetup runs a proxy with two upstream servers: bound gets the binding's
@@ -152,6 +155,7 @@ func newSetup(t *testing.T, tokens proxy.Tokens) *setup {
 	roots.AddCert(s.other.Certificate())
 
 	proxyURL, _ := url.Parse(p.URL)
+	s.addr, s.roots = proxyURL.Host, roots
 	s.client = &http.Client{Transport: &http.Transport{
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
@@ -227,6 +231,98 @@ func TestInterceptAddsToken(t *testing.T) {
 
 	if n := s.starts.Load(); n != 1 {
 		t.Errorf("credentials started %d times; want 1", n)
+	}
+}
+
+// elsewhere is a server the binding does not name. The proxy's upstream
+// transport trusts its certificate, so only the proxy keeps the token from it.
+func elsewhere(t *testing.T) (string, *atomic.Int32) {
+	t.Helper()
+
+	seen := &atomic.Int32{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { seen.Add(1) }))
+	t.Cleanup(srv.Close)
+
+	u, _ := url.Parse(srv.URL)
+
+	return u.Host, seen
+}
+
+// TestRefusesAnotherHost: the binding is matched on the CONNECT target, so a
+// request in the tunnel that names another host must not take the token there.
+func TestRefusesAnotherHost(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: testToken})
+	host, seen := elsewhere(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.bound.URL+"/v1/messages", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Host = host
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Errorf("status %d; want 421", resp.StatusCode)
+	}
+
+	if n := seen.Load(); n != 0 {
+		t.Errorf("the other host got %d requests; want none", n)
+	}
+}
+
+// TestRefusesAbsoluteURLToAnotherHost: a request line with a full URL names
+// its host too, whatever the Host header says.
+func TestRefusesAbsoluteURLToAnotherHost(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, staticTokens{tok: testToken})
+	host, seen := elsewhere(t)
+
+	bound, _ := url.Parse(s.bound.URL)
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := io.WriteString(conn, "CONNECT "+bound.Host+" HTTP/1.1\r\nHost: "+bound.Host+"\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT: %v, %v", resp, err)
+	}
+
+	_ = resp.Body.Close()
+
+	tlsConn := tls.Client(conn, &tls.Config{RootCAs: s.roots, ServerName: bound.Hostname(), MinVersion: tls.VersionTLS12})
+
+	if _, err := io.WriteString(tlsConn, "GET https://"+host+"/v1/messages HTTP/1.1\r\nHost: "+bound.Host+"\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err = http.ReadResponse(bufio.NewReader(tlsConn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Errorf("status %d; want 421", resp.StatusCode)
+	}
+
+	if n := seen.Load(); n != 0 {
+		t.Errorf("the other host got %d requests; want none", n)
 	}
 }
 
