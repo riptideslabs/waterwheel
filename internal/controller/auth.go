@@ -4,10 +4,13 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -74,6 +77,10 @@ type TokenReviewer struct {
 }
 
 func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller, error) {
+	if !plausible(token) {
+		return Caller{}, fmt.Errorf("%w: not an unexpired token for %s", errNotAuthenticated, Audience)
+	}
+
 	review := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{Audience}}}
 	if err := t.Client.Create(ctx, review); err != nil {
 		return Caller{}, fmt.Errorf("%w: TokenReview: %w", ErrAuthUnavailable, err)
@@ -113,6 +120,45 @@ func (t *TokenReviewer) Authenticate(ctx context.Context, token string) (Caller,
 	}
 
 	return Caller{Namespace: ns, ServiceAccount: sa, Pod: podName, PodUID: pod.UID, Labels: pod.Labels}, nil
+}
+
+// plausible reports whether token could pass the review: a JWT for the
+// controller that hasn't expired. Anyone can reach the API, and this spares
+// the API server a TokenReview for whatever else they send. Nothing here is
+// verified; the review decides.
+func plausible(token string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return false
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+
+	var claims struct {
+		Aud any     `json:"aud"`
+		Exp float64 `json:"exp"`
+	}
+
+	if json.Unmarshal(payload, &claims) != nil {
+		return false
+	}
+
+	// A minute's leeway, for a clock that differs from the API server's.
+	if time.Since(time.Unix(int64(claims.Exp), 0)) > time.Minute {
+		return false
+	}
+
+	switch aud := claims.Aud.(type) {
+	case string:
+		return aud == Audience
+	case []any:
+		return slices.Contains(aud, any(Audience))
+	}
+
+	return false
 }
 
 func single(v authnv1.ExtraValue) string {
