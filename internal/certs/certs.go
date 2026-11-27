@@ -6,6 +6,7 @@
 package certs
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -16,7 +17,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,11 +32,16 @@ const (
 	caTTL     = 10 * 365 * 24 * time.Hour
 	leafTTL   = 365 * 24 * time.Hour
 	renewAt   = 30 * 24 * time.Hour // renew the leaf when it has less left than this
+	checkLeaf = time.Hour           // how often a running controller looks at its leaf
 	caCertKey = "ca.crt"
 	caPrivKey = "ca.key" // only the controller can read the Secret (see the chart's Role)
 )
 
 var errUnusable = errors.New("unusable serving certificate")
+
+// ErrCAChanged: the Secret has another CA than the one the API server and the
+// pods were given. Only a restart hands out the new one.
+var ErrCAChanged = errors.New("the serving certificate's CA changed")
 
 // Serving is the controller's TLS certificate and the CA that signed it.
 type Serving struct {
@@ -58,7 +66,7 @@ func Ensure(ctx context.Context, c client.Client, namespace, name string, dnsNam
 		}
 	}
 
-	data, err := issue(sec.Data, dnsNames)
+	data, err := issue(sec.Data, dnsNames, leafTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +117,89 @@ func load(data map[string][]byte, dnsNames []string) (*Serving, error) {
 	return &Serving{Cert: cert, CAPEM: data[caCertKey]}, nil
 }
 
+// Keeper holds the serving certificate and renews it while the controller
+// runs. A leaf lasts a year, and Ensure alone renews it only at start.
+type Keeper struct {
+	Client    client.Client
+	Namespace string
+	Name      string
+	DNSNames  []string
+
+	current atomic.Pointer[Serving]
+}
+
+// Ensure is the package's Ensure; GetCertificate serves its certificate.
+func (k *Keeper) Ensure(ctx context.Context) (*Serving, error) {
+	s, err := Ensure(ctx, k.Client, k.Namespace, k.Name, k.DNSNames)
+	if err != nil {
+		return nil, err
+	}
+
+	k.current.Store(s)
+
+	return s, nil
+}
+
+// GetCertificate is a tls.Config's: the current certificate.
+func (k *Keeper) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	s := k.current.Load()
+	if s == nil {
+		return nil, fmt.Errorf("%w: not loaded yet", errUnusable)
+	}
+
+	return &s.Cert, nil
+}
+
+// Start looks at the leaf every hour, as a manager Runnable. It returns
+// ErrCAChanged, which stops the manager, when the Secret has another CA.
+func (k *Keeper) Start(ctx context.Context) error {
+	ticker := time.NewTicker(checkLeaf)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		if err := k.renew(ctx); errors.Is(err, ErrCAChanged) {
+			return err
+		} else if err != nil && ctx.Err() == nil {
+			// Another replica may have renewed it at the same time.
+			slog.Warn("renewing the serving certificate, trying again later", "err", err)
+		}
+	}
+}
+
+// NeedLeaderElection is false: every replica serves the certificate.
+func (k *Keeper) NeedLeaderElection() bool { return false }
+
+// renew replaces a leaf that is close to its end with the Secret's, which
+// another replica may have renewed already, or with a new one.
+func (k *Keeper) renew(ctx context.Context) error {
+	cur := k.current.Load()
+	if cur == nil || time.Until(cur.Cert.Leaf.NotAfter) >= renewAt {
+		return nil
+	}
+
+	s, err := Ensure(ctx, k.Client, k.Namespace, k.Name, k.DNSNames)
+	if err != nil {
+		return err
+	}
+
+	if !bytes.Equal(s.CAPEM, cur.CAPEM) {
+		return ErrCAChanged
+	}
+
+	k.current.Store(s)
+	slog.Info("renewed the serving certificate", "expires", s.Cert.Leaf.NotAfter)
+
+	return nil
+}
+
 // issue signs a new leaf, with the existing CA when there is a usable one.
-func issue(old map[string][]byte, dnsNames []string) (map[string][]byte, error) {
+func issue(old map[string][]byte, dnsNames []string, ttl time.Duration) (map[string][]byte, error) {
 	caCert, caPriv, caPEM, caKeyPEM, err := loadCA(old)
 	if err != nil {
 		if caCert, caPriv, caPEM, caKeyPEM, err = newCA(); err != nil {
@@ -128,7 +217,7 @@ func issue(old map[string][]byte, dnsNames []string) (map[string][]byte, error) 
 		Subject:      pkix.Name{CommonName: dnsNames[0]},
 		DNSNames:     dnsNames,
 		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(leafTTL),
+		NotAfter:     time.Now().Add(ttl),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

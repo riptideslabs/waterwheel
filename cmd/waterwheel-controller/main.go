@@ -132,10 +132,13 @@ func run(cfg config) error {
 		return err
 	}
 
-	serving, err := certs.Ensure(ctx, direct, cfg.namespace, "waterwheel-tls", []string{
+	// Renews the certificate while the controller runs, too.
+	keeper := &certs.Keeper{Client: direct, Namespace: cfg.namespace, Name: "waterwheel-tls", DNSNames: []string{
 		cfg.serviceName + "." + cfg.namespace + ".svc",
 		cfg.serviceName + "." + cfg.namespace + ".svc.cluster.local",
-	})
+	}}
+
+	serving, err := keeper.Ensure(ctx)
 	if err != nil {
 		return fmt.Errorf("serving certificate: %w", err)
 	}
@@ -145,7 +148,7 @@ func run(cfg config) error {
 		return err
 	}
 
-	tlsConfig := &tls.Config{Certificates: []tls.Certificate{serving.Cert}, MinVersion: tls.VersionTLS12}
+	tlsConfig := &tls.Config{GetCertificate: keeper.GetCertificate, MinVersion: tls.VersionTLS12}
 	service := cfg.serviceName + "." + cfg.namespace + ".svc"
 
 	injector := &controller.Injector{
@@ -203,6 +206,7 @@ func run(cfg config) error {
 		mgr.Add(server),
 		mgr.Add(webhook),
 		mgr.Add(webhookCA),
+		mgr.Add(keeper),
 		status.SetupWithManager(mgr),
 		mgr.AddHealthzCheck("ping", healthz.Ping),
 		mgr.AddReadyzCheck("webhook-ca", webhookCA.Ready),
