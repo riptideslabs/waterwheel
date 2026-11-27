@@ -3,6 +3,9 @@
 package v1alpha1
 
 import (
+	"bytes"
+	"encoding/json"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -49,6 +52,37 @@ type WorkloadIdentitySpec struct {
 // +kubebuilder:validation:MaxProperties=16
 // +kubebuilder:validation:XValidation:rule="self.all(k, k in ['k8s:pod:namespace', 'k8s:pod:name', 'k8s:pod:serviceaccount', 'k8s:container:name', 'k8s:container:image', 'process:uid', 'process:gid'] || (k.startsWith('k8s:label:') && size(k) > 10))",message="unknown selector key"
 type WorkloadSelector map[string]intstr.IntOrString
+
+// UnmarshalJSON keeps a value that is neither a string nor an int32 as its
+// JSON text. intstr.IntOrString fails on a larger integer, which the schema
+// allows, and one object that fails to decode fails every list of the kind.
+func (s *WorkloadSelector) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	if raw == nil {
+		*s = nil
+
+		return nil
+	}
+
+	sel := make(WorkloadSelector, len(raw))
+
+	for k, v := range raw {
+		var val intstr.IntOrString
+		if err := json.Unmarshal(v, &val); err != nil {
+			val = intstr.FromString(string(bytes.TrimSpace(v)))
+		}
+
+		sel[k] = val
+	}
+
+	*s = sel
+
+	return nil
+}
 
 type SVIDProperties struct {
 	// +optional
