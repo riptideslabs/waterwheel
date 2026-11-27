@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,5 +190,21 @@ func TestCredentialsReportAzureFailures(t *testing.T) {
 	want := []string{bindings.ReasonTokenExchangeFailed, bindings.ReasonTokenExchangeFailed}
 	if !slices.Equal(*got, want) {
 		t.Errorf("reports %v; want %v", *got, want)
+	}
+}
+
+// Logs show enough of a token to tell it from another, and nothing of one too
+// short for that to be safe.
+func TestRedact(t *testing.T) {
+	t.Parallel()
+
+	opaque := "5f4dcc3b5aa765d61d8327deb882cf99" // 32 characters
+	if got := redact(opaque); strings.Contains(got, opaque[:4]) || strings.Contains(got, opaque[len(opaque)-4:]) {
+		t.Errorf("redact(%d characters) = %q", len(opaque), got)
+	}
+
+	long := strings.Repeat("a", 8) + strings.Repeat("x", 100) + strings.Repeat("z", 4)
+	if got := redact(long); got != "aaaaaaaa…zzzz" {
+		t.Errorf("redact(long) = %q", got)
 	}
 }
