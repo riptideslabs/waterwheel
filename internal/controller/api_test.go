@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -146,4 +148,51 @@ func newClient(t *testing.T, objs ...client.Object) client.Client {
 	}
 
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+// A pod can't pile up watches: each costs a snapshot on every change.
+func TestAPILimitsWatchesPerPod(t *testing.T) {
+	t.Parallel()
+
+	api := &controller.API{Auth: fakeAuth{}, Reader: newClient(t), SystemNamespace: systemNamespace, Changes: controller.NewBroadcaster()}
+	srv := httptest.NewServer(api)
+	t.Cleanup(srv.Close)
+
+	var first io.Closer
+
+	for i := range controller.MaxWatchesPerPod {
+		resp := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("watch: status %d", resp.StatusCode)
+		}
+
+		if i == 0 {
+			first = resp.Body
+		}
+	}
+
+	extra := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
+	_ = extra.Body.Close()
+
+	if extra.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("one watch too many: status %d; want %d", extra.StatusCode, http.StatusTooManyRequests)
+	}
+
+	// A watch that ended makes room for the next.
+	_ = first.Close()
+
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		resp := get(t, srv.URL+"/v1/bindings?watch=true", goodToken)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("after a watch ended: status %d", resp.StatusCode)
+		}
+	}
 }

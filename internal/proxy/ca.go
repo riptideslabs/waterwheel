@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,9 @@ import (
 const (
 	caTTL   = 365 * 24 * time.Hour
 	leafTTL = 24 * time.Hour
+	// maxLeaves bounds the leaf cache: with a wildcard destination, the app
+	// decides how many names the proxy makes leaves for.
+	maxLeaves = 256
 )
 
 var errNotECDSA = errors.New("CA key is not ECDSA")
@@ -111,6 +115,9 @@ func loadCA(certPath, keyPath string) (*CA, error) {
 
 // Leaf returns a serving certificate for host, cached while it has an hour left.
 func (c *CA) Leaf(host string) (*tls.Certificate, error) {
+	// One host, however the app spells it.
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -148,9 +155,31 @@ func (c *CA) Leaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
+	if _, cached := c.leaves[host]; !cached && len(c.leaves) >= maxLeaves {
+		c.evict()
+	}
+
 	c.leaves[host] = l
 
 	return l, nil
+}
+
+// evict makes room in a full cache: it drops the leaves about to expire and,
+// if there are none, the oldest.
+func (c *CA) evict() {
+	var oldest string
+
+	for host, l := range c.leaves {
+		if time.Until(l.Leaf.NotAfter) <= time.Hour {
+			delete(c.leaves, host)
+		} else if oldest == "" || l.Leaf.NotAfter.Before(c.leaves[oldest].Leaf.NotAfter) {
+			oldest = host
+		}
+	}
+
+	if len(c.leaves) >= maxLeaves {
+		delete(c.leaves, oldest)
+	}
 }
 
 // WriteBundle writes the CA bundle the app trusts: the public roots, any extra

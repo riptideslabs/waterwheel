@@ -32,6 +32,10 @@ import (
 // token, which re-checks that its pod still exists.
 const MaxWatch = 10 * time.Minute
 
+// MaxWatchesPerPod is how many watches one pod may have open. A proxy keeps
+// one, and opens the next as that one ends.
+const MaxWatchesPerPod = 4
+
 // API serves each proxy its bindings, and records what it reports as events
 // on its pod:
 //
@@ -48,6 +52,8 @@ type API struct {
 	// TrustDomain is set with SPIFFE sources: the pod's workload ID comes
 	// from the WorkloadIdentities, rather than its service account.
 	TrustDomain string
+	// Identities, if set, keeps the identities in effect between requests.
+	Identities *identity.Builder
 	// Recorder gets the events of reports.
 	Recorder events.EventRecorder
 	// ReportTimeout bounds how long a report may take to arrive; 10 seconds if zero.
@@ -55,6 +61,7 @@ type API struct {
 
 	mu      sync.Mutex
 	watches map[[sha256.Size]byte]*openWatch // by token
+	perPod  map[string]int                   // open watches, by pod
 }
 
 // openWatch is the snapshot a watch sent last.
@@ -176,7 +183,7 @@ func (a *API) bindingsOf(ctx context.Context, c Caller) (bindings.Snapshot, erro
 		return bindings.Snapshot{}, err
 	}
 
-	id, reason := resolve(identity.Build(wids.Items, a.SystemNamespace), c)
+	id, reason := resolve(identitySet(a.Identities, wids.Items, a.SystemNamespace), c)
 	if reason != "" {
 		// No identity, so nothing to exchange; the proxy logs why.
 		return bindings.Snapshot{Bindings: []bindings.Binding{}, Reason: reason}, nil
@@ -290,6 +297,14 @@ func (a *API) watch(w http.ResponseWriter, r *http.Request, token string, c Call
 		return
 	}
 
+	pod := c.Namespace + "/" + c.Pod + "/" + string(c.PodUID)
+	if !a.openWatch(pod) {
+		http.Error(w, "too many watches for the pod", http.StatusTooManyRequests)
+
+		return
+	}
+	defer a.closeWatch(pod)
+
 	ctx, cancel := context.WithTimeout(r.Context(), MaxWatch)
 	defer cancel()
 
@@ -351,6 +366,34 @@ func (a *API) watch(w http.ResponseWriter, r *http.Request, token string, c Call
 			return
 		case <-changed:
 		}
+	}
+}
+
+// openWatch counts a watch of pod, unless it has too many open: each one
+// costs a snapshot on every change.
+func (a *API) openWatch(pod string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.perPod[pod] >= MaxWatchesPerPod {
+		return false
+	}
+
+	if a.perPod == nil {
+		a.perPod = map[string]int{}
+	}
+
+	a.perPod[pod]++
+
+	return true
+}
+
+func (a *API) closeWatch(pod string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.perPod[pod]--; a.perPod[pod] <= 0 {
+		delete(a.perPod, pod)
 	}
 }
 

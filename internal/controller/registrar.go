@@ -68,6 +68,8 @@ type IdentityRegistrar struct {
 	TrustDomain     string
 	// ClassName is the spire-controller-manager class of the ClusterSPIFFEIDs.
 	ClassName string
+	// Identities, if set, keeps the identities in effect between syncs.
+	Identities *identity.Builder
 	// Recorder gets an event for each condition change.
 	Recorder events.EventRecorder
 }
@@ -107,7 +109,7 @@ func (r *IdentityRegistrar) Sync(ctx context.Context) error {
 		return err
 	}
 
-	set := identity.Build(list.Items, r.SystemNamespace)
+	set := identitySet(r.Identities, list.Items, r.SystemNamespace)
 	failed := map[types.NamespacedName]error{}
 	wanted := map[string]bool{}
 
@@ -124,6 +126,15 @@ func (r *IdentityRegistrar) Sync(ctx context.Context) error {
 	}
 
 	return errors.Join(r.prune(ctx, wanted), r.updateStatus(ctx, list.Items, set, failed))
+}
+
+// identitySet is the identities in effect, from b when there is one.
+func identitySet(b *identity.Builder, wids []v1alpha1.WorkloadIdentity, systemNamespace string) *identity.Set {
+	if b == nil {
+		return identity.Build(wids, systemNamespace)
+	}
+
+	return b.Build(wids)
 }
 
 func registrationError(err error) error {
@@ -250,9 +261,9 @@ func (r *IdentityRegistrar) ClusterSPIFFEIDs(id *identity.Identity) []*unstructu
 			switch k {
 			case identity.KeyNamespace:
 			case identity.KeyPodName:
-				workload = append(workload, "k8s:pod-name:"+v)
+				workload = append(workload, "k8s:pod-name:"+literal(v))
 			case identity.KeyServiceAccount:
-				workload = append(workload, "k8s:sa:"+v)
+				workload = append(workload, "k8s:sa:"+literal(v))
 			default:
 				podLabels[strings.TrimPrefix(k, identity.KeyLabelPrefix)] = v
 			}
@@ -262,7 +273,7 @@ func (r *IdentityRegistrar) ClusterSPIFFEIDs(id *identity.Identity) []*unstructu
 
 		spec := map[string]any{
 			"className":                 r.ClassName,
-			"spiffeIDTemplate":          "spiffe://{{ .TrustDomain }}/" + id.WorkloadID,
+			"spiffeIDTemplate":          "spiffe://{{ .TrustDomain }}/" + literal(id.WorkloadID),
 			"workloadSelectorTemplates": toAny(workload),
 		}
 
@@ -311,14 +322,19 @@ func svidProperties(spec map[string]any, p *v1alpha1.SVIDProperties) {
 	}
 
 	if len(p.X509.DNSNames) > 0 {
-		// They are templates to the controller manager; keep them literal.
 		names := make([]string, 0, len(p.X509.DNSNames))
 		for _, d := range p.X509.DNSNames {
-			names = append(names, strings.ReplaceAll(d, "{{", "{{`{{`}}"))
+			names = append(names, literal(d))
 		}
 
 		spec["dnsNameTemplates"] = toAny(names)
 	}
+}
+
+// literal keeps a value as it is in a field the controller manager reads as
+// a template: {{ .PodMeta.Name }} as a pod name would match every pod.
+func literal(v string) string {
+	return strings.ReplaceAll(v, "{{", "{{`{{`}}")
 }
 
 // clusterSPIFFEIDName is waterwheel.<namespace>.<name>.<entry>. Namespaces

@@ -1,0 +1,10 @@
+# expect: svid.x509.dnsNames must end with .api-check.svc
+apiVersion: core.riptides.io/v1alpha1
+kind: WorkloadIdentity
+metadata: {name: foreign-dns-name, namespace: api-check}
+spec:
+  workloadID: ns/api-check/app/worker
+  selectors:
+  - "k8s:label:app": worker
+  svid:
+    x509: {dnsNames: [postgres.billing.svc.cluster.local]}

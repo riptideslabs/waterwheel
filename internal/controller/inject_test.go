@@ -202,3 +202,83 @@ func TestMutateExtraRoots(t *testing.T) {
 		t.Error("the sidecar didn't get the extra roots")
 	}
 }
+
+// Services under the cluster's own DNS domain bypass the proxy, as those under
+// cluster.local do.
+func TestMutateNoProxy(t *testing.T) {
+	t.Parallel()
+
+	for domain, want := range map[string]string{
+		"":              "localhost,127.0.0.1,.svc,.cluster.local",
+		"cluster.local": "localhost,127.0.0.1,.svc,.cluster.local",
+		"corp.example":  "localhost,127.0.0.1,.svc,.cluster.local,.svc.corp.example",
+	} {
+		inj := newInjector(t)
+		inj.ClusterDomain = domain
+
+		pod := appPod(nil)
+		if err := inj.Mutate(t.Context(), namespace, pod); err != nil {
+			t.Fatal(err)
+		}
+
+		got := ""
+
+		for _, e := range pod.Spec.Containers[0].Env {
+			if e.Name == "NO_PROXY" {
+				got = e.Value
+			}
+		}
+
+		if got != want {
+			t.Errorf("cluster domain %q: NO_PROXY = %q; want %q", domain, got, want)
+		}
+	}
+}
+
+// A hostNetwork pod's loopback is the node's, so the proxy would serve every
+// process on the node.
+func TestHandleSkipsHostNetwork(t *testing.T) {
+	t.Parallel()
+
+	pod := appPod(nil)
+	pod.Spec.HostNetwork = true
+
+	raw, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := newInjector(t).Handle(t.Context(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Namespace: namespace,
+		Object:    runtime.RawExtension{Raw: raw},
+	}})
+
+	if !resp.Allowed || len(resp.Patches) > 0 || len(resp.Warnings) == 0 {
+		t.Errorf("allowed = %v, %d patches, warnings %v; want the pod let through as it is, with a warning",
+			resp.Allowed, len(resp.Patches), resp.Warnings)
+	}
+}
+
+// Namespaces that enforce the restricted Pod Security Standard reject a
+// container without a seccomp profile.
+func TestSidecarMeetsRestricted(t *testing.T) {
+	t.Parallel()
+
+	pod := appPod(nil)
+	if err := newInjector(t).Mutate(t.Context(), namespace, pod); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := pod.Spec.InitContainers[0].SecurityContext
+
+	switch {
+	case sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault:
+		t.Errorf("seccompProfile = %v; want RuntimeDefault", sc.SeccompProfile)
+	case sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot:
+		t.Error("runAsNonRoot isn't set")
+	case sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation:
+		t.Error("allowPrivilegeEscalation isn't false")
+	case len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL":
+		t.Errorf("capabilities dropped: %v", sc.Capabilities.Drop)
+	}
+}

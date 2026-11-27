@@ -232,7 +232,11 @@ func exchangeRFC8693(ctx context.Context, log logr.Logger, b bindings.Binding, s
 		tokenType = rfc8693.TokenTypeIDToken
 	}
 
-	opts := []option.Option{rfc8693.WithSubjectTokenType(tokenType), rfc8693.WithScopes(r.Scopes)}
+	// JSON, as before tokenex made RFC 8693's form encoding its default.
+	opts := []option.Option{
+		rfc8693.WithSubjectTokenType(tokenType), rfc8693.WithScopes(r.Scopes),
+		rfc8693.WithBodyFormat(rfc8693.BodyFormatJSON),
+	}
 
 	if r.RequestedTokenType != "" {
 		opts = append(opts, rfc8693.WithRequestedTokenType(r.RequestedTokenType))

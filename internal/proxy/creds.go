@@ -23,6 +23,7 @@ import (
 var (
 	errExchangeTimeout = errors.New("timed out waiting for a token exchange")
 	errNoToken         = errors.New("no valid token")
+	errBindingGone     = errors.New("the binding was removed or changed")
 )
 
 // reportGrace holds back the report of a first failure that may fix itself:
@@ -45,6 +46,10 @@ type credentials struct {
 	log     *slog.Logger
 	report  func(bindings.Report)
 	started time.Time
+	// done is closed when the route ends: the binding was removed or changed.
+	// Connections intercepted before that still ask here, and from that moment
+	// none of them gets the token.
+	done <-chan struct{}
 
 	mu       sync.Mutex
 	access   string
@@ -55,10 +60,11 @@ type credentials struct {
 	kick     chan struct{}
 }
 
-func newCredentials(b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
+func newCredentials(done <-chan struct{}, b bindings.Binding, subject token.IdentityTokenProvider, log *slog.Logger,
 	report func(bindings.Report),
 ) *credentials {
 	return &credentials{
+		done:    done,
 		binding: b,
 		subject: subject,
 		log:     log,
@@ -115,6 +121,21 @@ func (c *credentials) run(ctx context.Context) {
 	}
 }
 
+// ended reports whether the route is gone.
+func (c *credentials) ended() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// gone reports whether err is of credentials whose binding was removed or changed.
+func gone(err error) bool {
+	return errors.Is(err, errBindingGone)
+}
+
 func (c *credentials) denied() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,6 +168,10 @@ func denied(err error) bool {
 func (c *credentials) set(access string, expiry time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.ended() {
+		return
+	}
 
 	c.access, c.expiry, c.lastErr = access, expiry, nil
 	close(c.changed)
@@ -207,6 +232,12 @@ func (c *credentials) valid() (string, bool) {
 // returns that attempt's result.
 func (c *credentials) Get(ctx context.Context) (string, error) {
 	c.mu.Lock()
+	if c.ended() {
+		c.mu.Unlock()
+
+		return "", errBindingGone
+	}
+
 	if tok, ok := c.valid(); ok {
 		c.mu.Unlock()
 
@@ -223,6 +254,8 @@ func (c *credentials) Get(ctx context.Context) (string, error) {
 
 	select {
 	case <-changed:
+	case <-c.done:
+		return "", errBindingGone
 	case <-time.After(15 * time.Second):
 		return "", errExchangeTimeout
 	case <-ctx.Done():
@@ -231,6 +264,10 @@ func (c *credentials) Get(ctx context.Context) (string, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.ended() {
+		return "", errBindingGone
+	}
 
 	if tok, ok := c.valid(); ok {
 		return tok, nil
@@ -297,8 +334,10 @@ func azureDetails(rest string) []string {
 	return more
 }
 
+// redact shows the ends of a token, enough to tell tokens apart in logs. A
+// short token shows nothing: twelve characters would be much of it.
 func redact(tok string) string {
-	if len(tok) < 20 {
+	if len(tok) < 48 {
 		return "(short token)"
 	}
 

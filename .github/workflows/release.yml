@@ -62,6 +62,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # Released binaries aren't built from a cache other jobs write.
+          cache: false
 
       - name: Binaries
         run: |

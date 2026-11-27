@@ -84,7 +84,7 @@ func New(ca *CA, subjects Subjects) *Proxy {
 			return failed{err}
 		}
 
-		c := newCredentials(b, subject, log, p.report)
+		c := newCredentials(ctx.Done(), b, subject, log, p.report)
 
 		go c.run(ctx)
 
@@ -393,6 +393,12 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 
 		tok, err := rt.tokens.Get(r.Context())
 		if err != nil {
+			// This connection outlived its route; the app's next one gets
+			// the routes of now.
+			if gone(err) {
+				w.Header().Set("Connection", "close")
+			}
+
 			slog.Warn("refused: no token", "request", target, "identity", identity, "provider", ProviderName(b), "err", describe(err))
 			writeError(w, http.StatusForbidden, "permission_error",
 				fmt.Sprintf("waterwheel-proxy: %s did not issue a token to %s (%s)", ProviderName(b), identity, describe(err)))

@@ -9,6 +9,11 @@ identity:
 # trust domain must match SPIRE's.
 trustDomain: ""
 
+# The cluster's DNS domain. Its Services bypass the proxy, and outside
+# Waterwheel's namespace the DNS names of an X.509-SVID must end with
+# .<namespace>.svc or .<namespace>.svc.<clusterDomain>.
+clusterDomain: cluster.local
+
 # spire source only.
 spire:
   # The spire-controller-manager class that Waterwheel's ClusterSPIFFEIDs carry.
@@ -28,13 +33,33 @@ image:
   registry: ghcr.io/riptideslabs/
   # The chart's appVersion if empty: the images of the release the chart is from.
   tag: ""
+  # Pin an image's content by digest (sha256:...): a tag can be pushed again.
+  digests:
+    controller: ""
+    proxy: ""
+    agent: ""
   pullPolicy: IfNotPresent
 
 controller:
+  # Every replica serves the webhook and the bindings API; one, the leader,
+  # writes status and registers identities.
+  replicas: 1
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
+    limits:
+      memory: 512Mi
+
+# Limit who reaches the controller with a NetworkPolicy; the cluster's CNI must
+# enforce them. The bindings API is then open to namespaces with injection
+# enabled, and the webhook, which answers anyone who reaches it, to webhookFrom.
+networkPolicy:
+  enabled: false
+  # Where the API server calls the webhook from, as NetworkPolicy peers. It is
+  # rarely a pod: use the control plane's addresses, or the node CIDR, e.g.
+  # [{ipBlock: {cidr: 10.0.0.0/24}}].
+  webhookFrom: []
 
 # waterwheel source only.
 agent:

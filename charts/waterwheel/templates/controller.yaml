@@ -15,9 +15,10 @@ metadata:
   name: waterwheel-controller
   labels: {{- include "waterwheel.labels" . | nindent 4 }}
 rules:
+# It reads the three kinds, and writes only their status.
 - apiGroups: ["core.riptides.io"]
   resources: ["workloadidentities", "credentialsources", "credentialbindings"]
-  verbs: ["get", "list", "watch", "update", "patch"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: ["core.riptides.io"]
   resources: ["workloadidentities/status", "credentialsources/status", "credentialbindings/status"]
   verbs: ["update", "patch"]
@@ -38,10 +39,11 @@ rules:
   resourceNames: ["waterwheel-injector"]
   verbs: ["get", "patch"]
 {{- if eq $source "spire" }}
-# One ClusterSPIFFEID per WorkloadIdentity selector entry.
+# One ClusterSPIFFEID per WorkloadIdentity selector entry: applied, and
+# deleted when no longer wanted.
 - apiGroups: ["spire.spiffe.io"]
   resources: ["clusterspiffeids"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  verbs: ["list", "create", "patch", "delete"]
 {{- end }}
 {{- if eq $source "waterwheel" }}
 # Sign only for pods on the requesting agent's node.
@@ -123,7 +125,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "waterwheel.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.controller.replicas | default 1 }}
   selector:
     matchLabels:
       app.kubernetes.io/component: controller
@@ -146,6 +148,7 @@ spec:
         - --identity-source={{ $source }}
         - --proxy-image={{ include "waterwheel.image" (dict "root" . "name" "waterwheel-proxy") }}
         - --proxy-pull-policy={{ .Values.image.pullPolicy }}
+        - --cluster-domain={{ .Values.clusterDomain | default "cluster.local" }}
         {{- if ne $source "serviceAccountToken" }}
         - --trust-domain={{ required "set trustDomain" .Values.trustDomain }}
         {{- end }}

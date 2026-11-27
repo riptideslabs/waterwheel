@@ -17,11 +17,13 @@ package identity
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -42,6 +44,7 @@ const (
 	ReasonReservedWorkloadID  = "ReservedWorkloadID"
 	ReasonForeignWorkloadID   = "ForeignWorkloadID"
 	ReasonForeignNamespace    = "ForeignNamespace"
+	ReasonForeignDNSName      = "ForeignDNSName"
 	ReasonUnsupportedSelector = "UnsupportedSelector"
 	ReasonInvalidSelector     = "InvalidSelector"
 	ReasonSelectorsOverlap    = "SelectorsOverlap"
@@ -138,15 +141,72 @@ type Set struct {
 	Shadowed map[types.NamespacedName][]types.NamespacedName
 
 	systemNamespace string
+	clusterDomain   string
+	// compared counts the pairs of entries Build compared key by key.
+	compared int
 }
 
 // Build works out which WorkloadIdentities are in effect. It takes all of
 // them, in every namespace, so the result doesn't depend on which pod asks.
 func Build(wids []v1alpha1.WorkloadIdentity, systemNamespace string) *Set {
+	return (&Builder{SystemNamespace: systemNamespace}).build(wids)
+}
+
+// Builder builds Sets, and keeps the last one while the WorkloadIdentities
+// stay the same: every bindings request needs the Set, and few change it.
+type Builder struct {
+	SystemNamespace string
+	// ClusterDomain is the cluster's DNS domain; cluster.local if empty.
+	ClusterDomain string
+
+	mu   sync.Mutex
+	key  [sha256.Size]byte
+	last *Set
+}
+
+// Build is the package's Build. Callers may get the same Set, so they must
+// not change it.
+func (b *Builder) Build(wids []v1alpha1.WorkloadIdentity) *Set {
+	key, ok := specsOf(wids)
+	if !ok {
+		return b.build(wids)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.last == nil || b.key != key {
+		b.last, b.key = b.build(wids), key
+	}
+
+	return b.last
+}
+
+// specsOf identifies the specs of wids by their UIDs and generations. Objects
+// that didn't come from the API server have neither.
+func specsOf(wids []v1alpha1.WorkloadIdentity) ([sha256.Size]byte, bool) {
+	ids := make([]string, 0, len(wids))
+
+	for i := range wids {
+		w := &wids[i]
+		if w.UID == "" || w.Generation == 0 {
+			return [sha256.Size]byte{}, false
+		}
+
+		ids = append(ids, string(w.UID)+"/"+strconv.FormatInt(w.Generation, 10))
+	}
+
+	slices.Sort(ids)
+
+	return sha256.Sum256([]byte(strings.Join(ids, "\n"))), true
+}
+
+func (b *Builder) build(wids []v1alpha1.WorkloadIdentity) *Set {
 	s := &Set{
 		Problems:        map[types.NamespacedName]Problem{},
 		Shadowed:        map[types.NamespacedName][]types.NamespacedName{},
-		systemNamespace: systemNamespace,
+		systemNamespace: b.SystemNamespace,
+		clusterDomain:   cmp.Or(b.ClusterDomain, "cluster.local"),
 	}
 
 	sorted := slices.Clone(wids)
@@ -155,13 +215,19 @@ func Build(wids []v1alpha1.WorkloadIdentity, systemNamespace string) *Set {
 			cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
 
+	x := newIndex()
+
 	for i := range sorted {
 		w := &sorted[i]
 		key := types.NamespacedName{Namespace: w.Namespace, Name: w.Name}
 
 		id, problem := s.parse(w)
+
+		var hashes []entryHash
+
 		if problem == nil {
-			problem = s.overlap(id)
+			hashes = x.hashes(id.Entries)
+			problem = s.overlap(x, id, hashes)
 		}
 
 		if problem != nil {
@@ -170,25 +236,14 @@ func Build(wids []v1alpha1.WorkloadIdentity, systemNamespace string) *Set {
 			continue
 		}
 
+		x.add(id.Entries, hashes, len(s.Identities))
 		s.Identities = append(s.Identities, id)
 	}
 
-	for _, general := range s.Identities {
-		for _, specific := range s.Identities {
-			if general.WorkloadID != specific.WorkloadID && shadows(specific, general) {
-				s.Shadowed[general.Key()] = append(s.Shadowed[general.Key()], specific.Key())
-			}
-		}
-	}
+	s.shadow(x)
+	s.compared = x.compared
 
 	return s
-}
-
-// shadows reports whether an entry of specific is more specific than an entry of general.
-func shadows(specific, general *Identity) bool {
-	return slices.ContainsFunc(general.Entries, func(g Entry) bool {
-		return slices.ContainsFunc(specific.Entries, g.strictSubsetOf)
-	})
 }
 
 // parse checks a WorkloadIdentity on its own: the namespace rules, which
@@ -202,6 +257,10 @@ func (s *Set) parse(w *v1alpha1.WorkloadIdentity) (*Identity, *Problem) {
 		return nil, &Problem{ReasonReservedWorkloadID, "the waterwheel/ prefix is reserved for Waterwheel's own identities"}
 	case !system && !strings.HasPrefix(id, "ns/"+w.Namespace+"/"):
 		return nil, &Problem{ReasonForeignWorkloadID, "workloadID must start with ns/" + w.Namespace + "/"}
+	}
+
+	if p := s.checkDNSNames(w); p != nil {
+		return nil, p
 	}
 
 	entries := make([]Entry, 0, len(w.Spec.Selectors))
@@ -230,12 +289,41 @@ func (s *Set) parse(w *v1alpha1.WorkloadIdentity) (*Identity, *Problem) {
 		entries = append(entries, e)
 	}
 
-	return &Identity{Namespace: w.Namespace, Name: w.Name, WorkloadID: id, Entries: entries, SVID: w.Spec.SVID}, nil
+	// A copy: the Set may outlive the objects it was built from.
+	return &Identity{Namespace: w.Namespace, Name: w.Name, WorkloadID: id, Entries: entries, SVID: w.Spec.SVID.DeepCopy()}, nil
+}
+
+// checkDNSNames keeps an X.509-SVID's DNS names to the Services of the
+// identity's namespace. A certificate with another namespace's Service name
+// would pass for that Service wherever the trust bundle is trusted.
+func (s *Set) checkDNSNames(w *v1alpha1.WorkloadIdentity) *Problem {
+	if w.Namespace == s.systemNamespace || w.Spec.SVID == nil || w.Spec.SVID.X509 == nil {
+		return nil
+	}
+
+	svc := "." + w.Namespace + ".svc"
+
+	for _, d := range w.Spec.SVID.X509.DNSNames {
+		name := strings.ToLower(d)
+		if !strings.HasSuffix(name, svc) && !strings.HasSuffix(name, svc+"."+s.clusterDomain) {
+			return &Problem{ReasonForeignDNSName, fmt.Sprintf(
+				"svid.x509.dnsNames must end with %s or %s.%s, unlike %s", svc, svc, s.clusterDomain, d)}
+		}
+	}
+
+	return nil
 }
 
 func checkKey(key, value string) *Problem {
 	switch {
-	case key == KeyNamespace || key == KeyPodName || key == KeyServiceAccount:
+	case key == KeyNamespace:
+		return nil
+	case key == KeyPodName || key == KeyServiceAccount:
+		// Only a name can match one, and SPIRE reads these values as templates.
+		if errs := validation.IsDNS1123Subdomain(value); len(errs) > 0 {
+			return &Problem{ReasonInvalidSelector, fmt.Sprintf("%s=%q: %s", key, value, strings.Join(errs, "; "))}
+		}
+
 		return nil
 	case strings.HasPrefix(key, KeyLabelPrefix):
 		label := strings.TrimPrefix(key, KeyLabelPrefix)
@@ -256,22 +344,91 @@ func checkKey(key, value string) *Problem {
 
 // overlap reports an entry that is the same as one of an identity already in
 // effect, with another workload ID. The older identity wins.
-func (s *Set) overlap(id *Identity) *Problem {
-	for _, other := range s.Identities {
-		if other.WorkloadID == id.WorkloadID {
+func (s *Set) overlap(x *index, id *Identity, hashes []entryHash) *Problem {
+	other, entry := -1, 0
+
+	for n, e := range id.Entries {
+		i := x.find(e, hashes[n].sum)
+		if i < 0 {
 			continue
 		}
 
-		for n, e := range id.Entries {
-			if slices.ContainsFunc(other.Entries, func(o Entry) bool { return maps.Equal(e, o) }) {
-				return &Problem{ReasonSelectorsOverlap, fmt.Sprintf(
-					"selector entry %d is the same as one of %s's, which gives %s; the older WorkloadIdentity wins",
-					n+1, other.Key(), other.WorkloadID)}
+		// Every identity with the entry gives the same workload ID.
+		oldest := x.entries[i].owners[0]
+		if s.Identities[oldest].WorkloadID != id.WorkloadID && (other < 0 || oldest < other) {
+			other, entry = oldest, n
+		}
+	}
+
+	if other < 0 {
+		return nil
+	}
+
+	o := s.Identities[other]
+
+	return &Problem{ReasonSelectorsOverlap, fmt.Sprintf(
+		"selector entry %d is the same as one of %s's, which gives %s; the older WorkloadIdentity wins",
+		entry+1, o.Key(), o.WorkloadID)}
+}
+
+// shadow fills in Shadowed: for each identity, the identities that give
+// another workload ID and have an entry more specific than one of its own.
+func (s *Set) shadow(x *index) {
+	words := (len(s.Identities) + 63) / 64
+	specifics := map[int][]uint64{} // by general identity, a bit per specific one
+
+	for _, g := range x.entries {
+		for _, c := range x.candidates(g) {
+			e := x.entries[c]
+			if !s.moreSpecific(x, e, g, specifics) {
+				continue
+			}
+
+			for _, general := range g.owners {
+				if specifics[general] == nil {
+					specifics[general] = make([]uint64, words)
+				}
+
+				for _, specific := range e.owners {
+					specifics[general][specific/64] |= 1 << (specific % 64)
+				}
 			}
 		}
 	}
 
-	return nil
+	for general, bits := range specifics {
+		var keys []types.NamespacedName
+
+		for i, id := range s.Identities {
+			if hasBit(bits, i) {
+				keys = append(keys, id.Key())
+			}
+		}
+
+		s.Shadowed[s.Identities[general].Key()] = keys
+	}
+}
+
+// moreSpecific reports whether e has every key and value of g, and more, and
+// gives another workload ID. It compares them only when the cheap checks pass,
+// and known holds what other entries of the same identities already showed.
+func (s *Set) moreSpecific(x *index, e, g *indexedEntry, known map[int][]uint64) bool {
+	if len(e.entry) <= len(g.entry) || g.bits&^e.bits != 0 ||
+		s.Identities[g.owners[0]].WorkloadID == s.Identities[e.owners[0]].WorkloadID {
+		return false
+	}
+
+	if len(g.owners) == 1 && len(e.owners) == 1 && hasBit(known[g.owners[0]], e.owners[0]) {
+		return false
+	}
+
+	x.compared++
+
+	return g.entry.subsetOf(e.entry)
+}
+
+func hasBit(bits []uint64, i int) bool {
+	return bits != nil && bits[i/64]&(1<<(i%64)) != 0
 }
 
 // Has reports whether an identity in effect gives workloadID to pods in

@@ -37,3 +37,12 @@ cosign verify ghcr.io/riptideslabs/waterwheel-proxy:v0.1.0 \
 The identity names the tag, so a signature made for another tag doesn't
 verify. The chart is verified the same way, as
 `ghcr.io/riptideslabs/charts/waterwheel:0.1.0`.
+
+The released chart names its images by tag, and a tag can be pushed again.
+`cosign verify` prints the digest it verified; to run exactly that image, give
+the chart the digests:
+
+```bash
+helm install waterwheel oci://ghcr.io/riptideslabs/charts/waterwheel --version 0.1.0 \
+  --set image.digests.controller=sha256:... --set image.digests.proxy=sha256:...
+```

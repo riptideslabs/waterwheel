@@ -102,6 +102,20 @@ type Injector struct {
 	// CSIDriver is set with the spire source: the SPIFFE CSI driver that
 	// mounts the SPIRE agent's socket.
 	CSIDriver string
+	// ClusterDomain is the cluster's DNS domain; cluster.local if empty.
+	ClusterDomain string
+}
+
+// noProxy keeps traffic inside the cluster off the proxy. Only the Services of
+// another cluster domain are added: a provider may be under the same domain.
+func (i *Injector) noProxy() string {
+	hosts := "localhost,127.0.0.1,.svc,.cluster.local"
+
+	if d := strings.Trim(i.ClusterDomain, "."); d != "" && d != "cluster.local" {
+		hosts += ",.svc." + d
+	}
+
+	return hosts
 }
 
 // ExtraRootsConfigMap holds CAs (key ca.crt) that both the proxy, upstream,
@@ -120,6 +134,13 @@ func (i *Injector) Handle(ctx context.Context, req admission.Request) admission.
 		return admission.Allowed("opted out")
 	case pod.Annotations[AnnotationInjected] == strTrue || hasContainer(pod, SidecarName):
 		return admission.Allowed("already injected")
+	case pod.Spec.HostNetwork:
+		// Its loopback is the node's: the proxy would give the pod's
+		// credentials to every process on the node.
+		slog.Info("not injecting a hostNetwork pod", "namespace", req.Namespace, "pod", cmp.Or(pod.Name, pod.GenerateName+"…"))
+
+		return admission.Allowed("hostNetwork pods are not injected").
+			WithWarnings("waterwheel: not injecting " + SidecarName + " into a hostNetwork pod")
 	}
 
 	if err := i.Mutate(ctx, req.Namespace, pod); err != nil {
@@ -165,7 +186,7 @@ func (i *Injector) Mutate(ctx context.Context, namespace string, pod *corev1.Pod
 	bundle := BundleDir + "/" + BundleFile
 	env := []corev1.EnvVar{
 		{Name: "HTTPS_PROXY", Value: "http://" + ProxyAddr},
-		{Name: "NO_PROXY", Value: "localhost,127.0.0.1,.svc,.cluster.local"},
+		{Name: "NO_PROXY", Value: i.noProxy()},
 	}
 
 	for _, name := range bundleEnv {
@@ -282,6 +303,8 @@ func (i *Injector) sidecar(extraRoots string) corev1.Container {
 			ReadOnlyRootFilesystem:   new(true),
 			AllowPrivilegeEscalation: new(false),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			// With it, the sidecar meets the restricted Pod Security Standard.
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		VolumeMounts: mounts,
 	}
