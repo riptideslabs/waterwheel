@@ -253,7 +253,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.intercept(w, host, rt, identity)
+	p.intercept(w, host, port, rt, identity)
 }
 
 // tunnel connects the app straight to the destination.
@@ -322,7 +322,7 @@ func hijack(w http.ResponseWriter) (net.Conn, bool) {
 // intercept terminates TLS with a leaf from the pod CA and serves HTTP/1.1,
 // WebSocket upgrades included, on the decrypted connection until the client
 // closes it.
-func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identity string) {
+func (p *Proxy) intercept(w http.ResponseWriter, host string, port int, rt *route, identity string) {
 	cert, err := p.CA.Leaf(host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -343,7 +343,7 @@ func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identit
 
 	ln := newConnListener(tlsConn)
 	srv := &http.Server{
-		Handler:           p.forwarder(rt, identity),
+		Handler:           p.forwarder(host, port, rt, identity),
 		ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog:          log.New(io.Discard, "", 0),
 		ConnState: func(_ net.Conn, s http.ConnState) {
@@ -357,14 +357,17 @@ func (p *Proxy) intercept(w http.ResponseWriter, host string, rt *route, identit
 
 type tokenKey struct{}
 
-// forwarder sends each request on to the destination with the binding's token.
-func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
+// forwarder sends each request on to the CONNECT target, host:port, with the
+// binding's token. The binding was matched on that target, so a request that
+// names another host is refused: the token must not follow its Host header.
+func (p *Proxy) forwarder(host string, port int, rt *route, identity string) http.Handler {
 	b := rt.binding
+	connectTarget := net.JoinHostPort(host, strconv.Itoa(port))
 
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "https"
-			pr.Out.URL.Host = pr.In.Host
+			pr.Out.URL.Host = connectTarget
 			pr.Out.Host = pr.In.Host
 
 			for _, h := range strippedHeaders(b) {
@@ -391,6 +394,14 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 		start := time.Now()
 		target := r.Method + " https://" + r.Host + r.URL.Path
 
+		if !sameTarget(r.Host, host, port) {
+			slog.Warn("refused: not the CONNECT target", "request", target, "connect", connectTarget, "identity", identity)
+			writeError(w, http.StatusMisdirectedRequest, "invalid_request_error",
+				fmt.Sprintf("waterwheel-proxy: request for %s on a connection to %s", r.Host, connectTarget))
+
+			return
+		}
+
 		tok, err := rt.tokens.Get(r.Context())
 		if err != nil {
 			slog.Warn("refused: no token", "request", target, "identity", identity, "provider", ProviderName(b), "err", describe(err))
@@ -410,6 +421,24 @@ func (p *Proxy) forwarder(rt *route, identity string) http.Handler {
 		slog.Info("added token", "request", target, "token", redact(tok), "identity", identity,
 			"status", rec.status, "took", time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// sameTarget reports whether a request's Host names the CONNECT target. A Host
+// without a port means 443.
+func sameTarget(reqHost, host string, port int) bool {
+	h, p := reqHost, "443"
+
+	if sh, sp, err := net.SplitHostPort(reqHost); err == nil {
+		h, p = sh, sp
+	} else {
+		h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	}
+
+	return p == strconv.Itoa(port) && normalizeHost(h) == normalizeHost(host)
+}
+
+func normalizeHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
 // writeError answers in the shape of Anthropic's API errors; OpenAI clients
